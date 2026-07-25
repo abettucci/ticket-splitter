@@ -1,0 +1,241 @@
+name: Build and Deploy SplitBot
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  TF_VAR_aws_region: ${{ secrets.AWS_REGION }}
+  TF_VAR_telegram_bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+  TF_VAR_whatsapp_verify_token: ${{ secrets.WHATSAPP_VERIFY_TOKEN }}
+  TF_VAR_environment: "prod"
+  TF_VAR_project_name: "splitbot"
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+
+jobs:
+  build-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Build Go Lambda
+        working-directory: ./backend
+        run: |
+          echo "📦 Downloading dependencies..."
+          go mod download
+          go mod tidy
+          
+          echo "🔨 Building for AWS Lambda (ARM64)..."
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build \
+            -tags lambda.norpc \
+            -ldflags="-s -w" \
+            -o bootstrap .
+          
+          echo "📦 Creating deployment package..."
+          zip function.zip bootstrap
+          
+          echo "✅ Build complete!"
+          ls -lh function.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lambda-package
+          path: backend/function.zip
+          retention-days: 1
+
+  terraform-deploy:
+    needs: [build-backend]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Lambda package
+        uses: actions/download-artifact@v4
+        with:
+          name: lambda-package
+          path: backend/
+
+      - name: Verify Lambda package
+        run: |
+          ls -lh backend/function.zip
+          echo "✅ Lambda package downloaded"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.10.5
+
+      - name: Terraform Init
+        working-directory: ./infrastructure
+        run: |
+          echo "🔧 Initializing Terraform..."
+          terraform init
+          
+          echo "📦 Importing existing AWS resources..."
+          
+          # 1. DynamoDB Table
+          echo "  → Importing DynamoDB table..."
+          terraform import aws_dynamodb_table.main splitbot-prod 2>/dev/null || true
+          
+          # 2. IAM Role
+          echo "  → Importing IAM role..."
+          terraform import aws_iam_role.lambda_role splitbot-prod-lambda-role 2>/dev/null || true
+          
+          # 3. IAM Role Policies (inline policies)
+          echo "  → Importing IAM policies..."
+          terraform import aws_iam_role_policy.lambda_logs splitbot-prod-lambda-role:splitbot-prod-logs 2>/dev/null || true
+          terraform import aws_iam_role_policy.lambda_dynamodb splitbot-prod-lambda-role:splitbot-prod-dynamodb 2>/dev/null || true
+          
+          # 4. CloudWatch Log Groups
+          echo "  → Importing CloudWatch log groups..."
+          terraform import aws_cloudwatch_log_group.lambda_logs /aws/lambda/splitbot-prod 2>/dev/null || true
+          terraform import aws_cloudwatch_log_group.api_logs /aws/apigateway/splitbot-prod 2>/dev/null || true
+          
+          # 5. Lambda Function
+          echo "  → Importing Lambda function..."
+          terraform import aws_lambda_function.bot splitbot-prod 2>/dev/null || true
+          
+          # 6. API Gateway v2 (HTTP API)
+          echo "  → Importing API Gateway v2..."
+          API_ID=$(aws apigatewayv2 get-apis --query "Items[?Name=='splitbot-prod-api'].ApiId" --output text 2>/dev/null || echo "")
+          
+          if [ ! -z "$API_ID" ] && [ "$API_ID" != "None" ]; then
+            echo "    ✓ API Gateway ID: $API_ID"
+            terraform import aws_apigatewayv2_api.bot_api $API_ID 2>/dev/null || true
+            terraform import aws_apigatewayv2_stage.default $API_ID/\$default 2>/dev/null || true
+            
+            # Import integration
+            INTEGRATION_ID=$(aws apigatewayv2 get-integrations --api-id $API_ID --query "Items[0].IntegrationId" --output text 2>/dev/null || echo "")
+            if [ ! -z "$INTEGRATION_ID" ] && [ "$INTEGRATION_ID" != "None" ]; then
+              echo "    ✓ Integration ID: $INTEGRATION_ID"
+              terraform import aws_apigatewayv2_integration.lambda $API_ID/$INTEGRATION_ID 2>/dev/null || true
+            fi
+            
+            # Import POST route
+            ROUTE_ID=$(aws apigatewayv2 get-routes --api-id $API_ID --query "Items[?RouteKey=='POST /webhook'].RouteId" --output text 2>/dev/null || echo "")
+            if [ ! -z "$ROUTE_ID" ] && [ "$ROUTE_ID" != "None" ]; then
+              echo "    ✓ POST Route ID: $ROUTE_ID"
+              terraform import aws_apigatewayv2_route.webhook $API_ID/$ROUTE_ID 2>/dev/null || true
+            fi
+
+            # Import GET route
+            GET_ROUTE_ID=$(aws apigatewayv2 get-routes --api-id $API_ID --query "Items[?RouteKey=='GET /webhook'].RouteId" --output text 2>/dev/null || echo "")
+            if [ ! -z "$GET_ROUTE_ID" ] && [ "$GET_ROUTE_ID" != "None" ]; then
+              echo "    ✓ GET Route ID: $GET_ROUTE_ID"
+              terraform import aws_apigatewayv2_route.webhook_get $API_ID/$GET_ROUTE_ID 2>/dev/null || true
+            fi
+          else
+            echo "    ℹ️ API Gateway not found (will be created)"
+          fi
+          
+          # 7. Lambda Permission
+          echo "  → Importing Lambda permission..."
+          terraform import aws_lambda_permission.api_gateway splitbot-prod/AllowAPIGatewayInvoke 2>/dev/null || true
+          
+          # 8. CloudWatch Alarm
+          echo "  → Importing CloudWatch alarm..."
+          terraform import aws_cloudwatch_metric_alarm.high_error_rate splitbot-prod-high-error-rate 2>/dev/null || true
+          
+          echo "✅ Import phase completed!"
+
+      - name: Terraform Plan
+        working-directory: ./infrastructure
+        run: terraform plan -out=tfplan
+
+      - name: Terraform Apply
+        working-directory: ./infrastructure
+        run: terraform apply -auto-approve tfplan
+
+      - name: Get Webhook URL
+        id: webhook
+        working-directory: ./infrastructure
+        run: |
+          echo "🔍 Getting webhook URL..."
+          
+          # Get outputs
+          WEBHOOK_URL=$(terraform output -raw webhook_url 2>/dev/null || echo "")
+          WEBHOOK_SECRET=$(terraform output -raw webhook_secret 2>/dev/null || echo "")
+          
+          if [ -z "$WEBHOOK_URL" ]; then
+            echo "❌ Failed to get webhook URL"
+            exit 1
+          fi
+          
+          echo "✅ Webhook URL: $WEBHOOK_URL"
+          echo "webhook_url=$WEBHOOK_URL" >> $GITHUB_OUTPUT
+          echo "webhook_secret=$WEBHOOK_SECRET" >> $GITHUB_OUTPUT
+
+      - name: Configure Telegram Webhook
+        run: |
+          echo "🤖 Configuring Telegram webhook..."
+          
+          URL="${{ steps.webhook.outputs.webhook_url }}"
+          SECRET="${{ steps.webhook.outputs.webhook_secret }}"
+          TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}"
+          
+          echo "📡 Setting webhook to: $URL"
+          
+          # Delete existing webhook first
+          curl -s -X POST "https://api.telegram.org/bot$TOKEN/deleteWebhook" \
+            -H "Content-Type: application/json" \
+            -d '{"drop_pending_updates": true}'
+          
+          # Set new webhook with secret
+          RESPONSE=$(curl -s -X POST "https://api.telegram.org/bot$TOKEN/setWebhook" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"url\": \"$URL\",
+              \"secret_token\": \"$SECRET\",
+              \"allowed_updates\": [\"message\", \"callback_query\"],
+              \"drop_pending_updates\": true,
+              \"max_connections\": 100
+            }")
+          
+          echo "📨 Response: $RESPONSE"
+          
+          # Verify
+          if echo "$RESPONSE" | grep -q '"ok":true'; then
+            echo "✅ Webhook configured successfully!"
+          else
+            echo "❌ Webhook configuration failed"
+            exit 1
+          fi
+
+      - name: Verify Webhook
+        run: |
+          echo "🔍 Verifying webhook configuration..."
+          curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/getWebhookInfo" | jq .
+
+      - name: Deploy Summary
+        run: |
+          echo "============================================"
+          echo "🚀 DEPLOYMENT COMPLETE!"
+          echo "============================================"
+          echo ""
+          echo "📡 Webhook URL: ${{ steps.webhook.outputs.webhook_url }}"
+          echo "🤖 Bot is ready to receive messages!"
+          echo ""
+          echo "Test your bot by sending /start in Telegram"
+          echo "============================================"
+
+
+
