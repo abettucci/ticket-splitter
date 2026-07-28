@@ -30,8 +30,7 @@ RUN npm install --omit=dev --no-audit --no-fund
 
 COPY src ./src
 
-RUN mkdir -p /data/wa-session && chown -R node:node /app /data
-USER node
+RUN mkdir -p /data/wa-session
 
 EXPOSE 3000
 CMD ["node", "src/index.js"]
