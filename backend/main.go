@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/abettucci/group-split-bot/internal/db"
 	"github.com/abettucci/group-split-bot/internal/security"
 	"github.com/abettucci/group-split-bot/internal/telegram"
+	"github.com/abettucci/group-split-bot/internal/twilio"
 	"github.com/abettucci/group-split-bot/internal/whatsapp"
 	"github.com/abettucci/group-split-bot/internal/whatsappweb"
 	"github.com/aws/aws-lambda-go/events"
@@ -45,6 +47,7 @@ var (
 	botHandler      *bot.Handler
 	waBotHandler    *bot.Handler
 	waWebBotHandler *bot.Handler // nil cuando WHATSAPP_WEB_ENABLED != "true"
+	twilioBotHandler *bot.Handler // nil cuando TWILIO_ACCOUNT_SID no está configurado
 	logger          *log.Logger
 )
 
@@ -65,6 +68,13 @@ func init() {
 	waClient := whatsapp.NewClient()
 	waBotHandler = bot.NewHandler(dbClient, waClient, logger)
 
+	// Initialize Twilio WhatsApp client (optional, opt-in via env)
+	if os.Getenv("TWILIO_ACCOUNT_SID") != "" {
+		twilioClient := twilio.NewClient()
+		twilioBotHandler = bot.NewHandler(dbClient, twilioClient, logger)
+		logger.Printf("Twilio WhatsApp channel enabled (from=%s)", os.Getenv("TWILIO_WHATSAPP_FROM"))
+	}
+
 	// Initialize WhatsApp Web client (optional, opt-in via env)
 	if os.Getenv("WHATSAPP_WEB_ENABLED") == "true" {
 		waWebClient := whatsappweb.NewClient()
@@ -75,6 +85,14 @@ func init() {
 
 func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	startTime := time.Now()
+
+	// ============================================
+	// TWILIO WHATSAPP INBOUND
+	// Path: /twilio/inbound
+	// ============================================
+	if request.HTTPMethod == "POST" && strings.HasSuffix(request.Path, "/twilio/inbound") {
+		return handleTwilioInbound(ctx, request, startTime), nil
+	}
 
 	// ============================================
 	// WHATSAPP WEB INBOUND (sidecar Node)
@@ -343,6 +361,91 @@ func handleWaWebInbound(ctx context.Context, request events.APIGatewayProxyReque
 	}
 
 	logger.Printf("[%s] WA Web inbound processed in %v", requestID, time.Since(startTime))
+	return successResponse()
+}
+
+// handleTwilioInbound procesa mensajes entrantes desde Twilio WhatsApp.
+// Twilio envía un POST con body application/x-www-form-urlencoded y firma en X-Twilio-Signature.
+func handleTwilioInbound(ctx context.Context, request events.APIGatewayProxyRequest, startTime time.Time) events.APIGatewayProxyResponse {
+	requestID := request.RequestContext.RequestID
+
+	if twilioBotHandler == nil {
+		logger.Printf("[%s] Twilio inbound received but channel disabled (set TWILIO_ACCOUNT_SID)", requestID)
+		return errorResponse(http.StatusServiceUnavailable, "channel disabled")
+	}
+
+	// Validar firma Twilio (omitir solo en desarrollo explícito)
+	if os.Getenv("TWILIO_SKIP_SIGNATURE") != "true" {
+		sig := request.Headers["x-twilio-signature"]
+		if sig == "" {
+			sig = request.Headers["X-Twilio-Signature"]
+		}
+		webhookURL := os.Getenv("TWILIO_WEBHOOK_URL") // ej: https://api.tu-dominio.com/twilio/inbound
+		authToken := os.Getenv("TWILIO_AUTH_TOKEN")
+		if sig == "" || !twilio.ValidateSignature(authToken, webhookURL, request.Body, sig) {
+			logger.Printf("[%s] Twilio inbound: SECURITY ALERT invalid signature", requestID)
+			return errorResponse(http.StatusUnauthorized, "invalid signature")
+		}
+	}
+
+	// Parsear form-encoded body de Twilio
+	params, err := url.ParseQuery(request.Body)
+	if err != nil {
+		logger.Printf("[%s] Twilio inbound: parse error: %v", requestID, err)
+		return errorResponse(http.StatusBadRequest, "invalid body")
+	}
+
+	from := params.Get("From")       // "whatsapp:+5491122334455"
+	body := params.Get("Body")       // texto del mensaje
+	name := params.Get("ProfileName") // nombre del contacto en WhatsApp
+
+	if from == "" || body == "" {
+		logger.Printf("[%s] Twilio inbound: missing From or Body", requestID)
+		return successResponse()
+	}
+
+	// Extraer número de teléfono: "whatsapp:+5491122334455" -> 5491122334455
+	phoneStr := strings.TrimPrefix(from, "whatsapp:+")
+	phoneStr = strings.TrimPrefix(phoneStr, "whatsapp:") // por si viene sin +
+	phoneInt, err := strconv.ParseInt(phoneStr, 10, 64)
+	if err != nil {
+		logger.Printf("[%s] Twilio inbound: invalid phone number %s: %v", requestID, from, err)
+		return successResponse()
+	}
+
+	if name == "" {
+		name = phoneStr
+	}
+
+	text := security.SanitizeInput(body)
+	if len(text) > security.MaxMessageLength {
+		text = text[:security.MaxMessageLength]
+	}
+
+	if !security.CheckRateLimit(phoneInt) {
+		logger.Printf("[%s] Twilio inbound: rate limited %s", requestID, from)
+		return successResponse()
+	}
+
+	update := &telegram.Update{
+		Message: &telegram.Message{
+			Text: text,
+			From: &telegram.User{
+				ID:        phoneInt,
+				FirstName: name,
+			},
+			Chat: &telegram.Chat{
+				ID:   phoneInt,
+				Type: "private",
+			},
+		},
+	}
+
+	if err := twilioBotHandler.HandleUpdate(ctx, update); err != nil {
+		logger.Printf("[%s] Twilio inbound: handler error: %v", requestID, err)
+	}
+
+	logger.Printf("[%s] Twilio inbound processed in %v", requestID, time.Since(startTime))
 	return successResponse()
 }
 
