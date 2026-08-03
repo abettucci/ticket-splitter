@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"log"
@@ -374,22 +375,34 @@ func handleTwilioInbound(ctx context.Context, request events.APIGatewayProxyRequ
 		return errorResponse(http.StatusServiceUnavailable, "channel disabled")
 	}
 
+	// API Gateway puede base64-encodear el body para content-types no-JSON
+	bodyStr := request.Body
+	if request.IsBase64Encoded {
+		decoded, err := base64.StdEncoding.DecodeString(bodyStr)
+		if err != nil {
+			logger.Printf("[%s] Twilio inbound: base64 decode error: %v", requestID, err)
+			return errorResponse(http.StatusBadRequest, "invalid body encoding")
+		}
+		bodyStr = string(decoded)
+	}
+	logger.Printf("[%s] Twilio inbound body: %s", requestID, bodyStr)
+
 	// Validar firma Twilio (omitir solo en desarrollo explícito)
 	if os.Getenv("TWILIO_SKIP_SIGNATURE") != "true" {
 		sig := request.Headers["x-twilio-signature"]
 		if sig == "" {
 			sig = request.Headers["X-Twilio-Signature"]
 		}
-		webhookURL := os.Getenv("TWILIO_WEBHOOK_URL") // ej: https://api.tu-dominio.com/twilio/inbound
+		webhookURL := os.Getenv("TWILIO_WEBHOOK_URL")
 		authToken := os.Getenv("TWILIO_AUTH_TOKEN")
-		if sig == "" || !twilio.ValidateSignature(authToken, webhookURL, request.Body, sig) {
+		if sig == "" || !twilio.ValidateSignature(authToken, webhookURL, bodyStr, sig) {
 			logger.Printf("[%s] Twilio inbound: SECURITY ALERT invalid signature", requestID)
 			return errorResponse(http.StatusUnauthorized, "invalid signature")
 		}
 	}
 
 	// Parsear form-encoded body de Twilio
-	params, err := url.ParseQuery(request.Body)
+	params, err := url.ParseQuery(bodyStr)
 	if err != nil {
 		logger.Printf("[%s] Twilio inbound: parse error: %v", requestID, err)
 		return errorResponse(http.StatusBadRequest, "invalid body")
