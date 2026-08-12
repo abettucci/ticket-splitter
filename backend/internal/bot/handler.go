@@ -385,7 +385,7 @@ Ejemplos:
 • /nuevo_gasto Cena 15000
 • /nuevo_gasto Super mercado 8500.50
 • /nuevo_gasto Nafta viaje 12000 @juan
-• /nuevo_gasto Hielo 8000 agustin bettucci
+• /nuevo_gasto Hielo 8000 juan garcia
 
 <i>Nota: Si especificas el usuario, ese será quien pagó el gasto. Podés usar @ o el nombre completo.</i>`)
 	}
