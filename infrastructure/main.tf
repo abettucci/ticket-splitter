@@ -66,6 +66,37 @@ variable "whatsapp_verify_token" {
   sensitive   = true
 }
 
+variable "twilio_account_sid" {
+  description = "twilio_account_sid"
+  type        = string
+  sensitive   = true
+}
+
+variable "twilio_auth_token" {
+  description = "twilio_auth_token"
+  type        = string
+  sensitive   = true
+}
+
+variable "twilio_whatsapp_from" {
+  description = "twilio_whatsapp_from"
+  type        = string
+  sensitive   = true
+}
+
+variable "twilio_webhook_url" {
+  description = "twilio_webhook_url"
+  type        = string
+  sensitive   = true
+}
+
+variable "twilio_skip_signature" {
+  description = "twilio_skip_signature"
+  type        = string
+  sensitive   = true
+}
+
+
 variable "project_name" {
   description = "Project name"
   type        = string
@@ -259,6 +290,11 @@ resource "aws_lambda_function" "bot" {
       TELEGRAM_WEBHOOK_SECRET = random_password.webhook_secret.result
       ENVIRONMENT             = var.environment
       WHATSAPP_VERIFY_TOKEN   = var.whatsapp_verify_token
+      TWILIO_ACCOUNT_SID      = var.twilio_account_sid
+      TWILIO_AUTH_TOKEN       = var.twilio_auth_token
+      TWILIO_WHATSAPP_FROM    = var.twilio_whatsapp_from
+      TWILIO_WEBHOOK_URL      = var.twilio_webhook_url
+      TWILIO_SKIP_SIGNATURE   = var.twilio_skip_signature
     }
   }
 
