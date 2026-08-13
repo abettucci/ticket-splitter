@@ -378,6 +378,12 @@ resource "aws_apigatewayv2_route" "webhook_get" {
   target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 }
 
+resource "aws_apigatewayv2_route" "twilio_inbound" {
+  api_id    = aws_apigatewayv2_api.bot_api.id
+  route_key = "POST /twilio/inbound"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+
 resource "aws_lambda_permission" "api_gateway" {
   statement_id  = "AllowAPIGatewayInvoke"
   action        = "lambda:InvokeFunction"
@@ -469,6 +475,11 @@ resource "aws_cloudwatch_metric_alarm" "high_error_rate" {
 output "webhook_url" {
   description = "Telegram webhook URL"
   value       = "${aws_apigatewayv2_api.bot_api.api_endpoint}/webhook"
+}
+
+output "twilio_webhook_url" {
+  description = "Twilio WhatsApp webhook URL — use this as TWILIO_WEBHOOK_URL"
+  value       = "${aws_apigatewayv2_api.bot_api.api_endpoint}/twilio/inbound"
 }
 
 output "webhook_secret" {
