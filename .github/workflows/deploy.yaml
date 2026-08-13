@@ -148,6 +148,13 @@ jobs:
               echo "    ✓ GET Route ID: $GET_ROUTE_ID"
               terraform import aws_apigatewayv2_route.webhook_get $API_ID/$GET_ROUTE_ID 2>/dev/null || true
             fi
+
+            # Import Twilio inbound route
+            TWILIO_ROUTE_ID=$(aws apigatewayv2 get-routes --api-id $API_ID --query "Items[?RouteKey=='POST /twilio/inbound'].RouteId" --output text 2>/dev/null || echo "")
+            if [ ! -z "$TWILIO_ROUTE_ID" ] && [ "$TWILIO_ROUTE_ID" != "None" ]; then
+              echo "    ✓ Twilio Route ID: $TWILIO_ROUTE_ID"
+              terraform import aws_apigatewayv2_route.twilio_inbound $API_ID/$TWILIO_ROUTE_ID 2>/dev/null || true
+            fi
           else
             echo "    ℹ️ API Gateway not found (will be created)"
           fi
