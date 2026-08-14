@@ -14,14 +14,16 @@ const (
 	StepNewExpenseDescription
 	StepNewExpenseAmount
 	StepNewExpensePayer
+	StepSelectDivideExpense // selección de gasto a dividir (para WhatsApp sin botones)
 )
 
 // ConversationState guarda el estado de una conversación en curso para un usuario
 type ConversationState struct {
-	Step        ConversationStep
-	Description string
-	Amount      float64
-	ExpiresAt   time.Time
+	Step          ConversationStep
+	Description   string
+	Amount        float64
+	ExpiresAt     time.Time
+	DivideOptions map[int]string // índice (1-based) -> shortID, usado en StepSelectDivideExpense
 }
 
 // ConversationManager maneja el estado conversacional por usuario/chat

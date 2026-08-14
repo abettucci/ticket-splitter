@@ -55,7 +55,7 @@ func (h *Handler) handleMenuCallback(ctx context.Context, chatID, userID int64, 
 	case "balance":
 		return h.handleBalance(ctx, chatID)
 	case "dividir":
-		return h.handleMenuDivide(ctx, chatID)
+		return h.handleMenuDivide(ctx, chatID, userID)
 	case "simplificar":
 		return h.handleSimplify(ctx, chatID)
 	case "miembros":
@@ -67,17 +67,21 @@ func (h *Handler) handleMenuCallback(ctx context.Context, chatID, userID int64, 
 	}
 }
 
-// handleMenuDivide muestra los gastos pendientes de dividir como botones clickeables
-func (h *Handler) handleMenuDivide(ctx context.Context, chatID int64) error {
+// handleMenuDivide muestra los gastos pendientes de dividir como botones clickeables.
+// También guarda estado de conversación para que en WhatsApp el usuario pueda responder con un número.
+func (h *Handler) handleMenuDivide(ctx context.Context, chatID int64, userID ...int64) error {
 	expenses, err := h.db.GetGroupExpenses(ctx, chatID, 10)
 	if err != nil {
 		return h.tg.SendMessage(ctx, chatID, "❌ Error al obtener los gastos.")
 	}
 
+	divideOptions := map[int]string{}
 	var rows [][]telegram.InlineKeyboardButton
+	n := 1
 	for _, exp := range expenses {
 		if !exp.IsDivided {
 			shortID := exp.ID[:8]
+			divideOptions[n] = shortID
 			label := fmt.Sprintf("📝 %s — %s", exp.Description, telegram.FormatMoney(exp.TotalAmount))
 			if len(label) > 60 {
 				label = label[:57] + "..."
@@ -85,11 +89,20 @@ func (h *Handler) handleMenuDivide(ctx context.Context, chatID int64) error {
 			rows = append(rows, []telegram.InlineKeyboardButton{
 				{Text: label, CallbackData: fmt.Sprintf("divide:%s", shortID)},
 			})
+			n++
 		}
 	}
 
 	if len(rows) == 0 {
 		return h.tg.SendMessage(ctx, chatID, "✅ Todos los gastos ya fueron divididos.")
+	}
+
+	// Guardar estado para que el usuario pueda responder con número en WhatsApp
+	if len(userID) > 0 {
+		h.conv.Set(chatID, userID[0], &ConversationState{
+			Step:          StepSelectDivideExpense,
+			DivideOptions: divideOptions,
+		})
 	}
 
 	return h.tg.SendMessageWithOptions(ctx, &telegram.SendMessageRequest{
@@ -110,12 +123,21 @@ func (h *Handler) startExpenseFlow(ctx context.Context, chatID, userID int64) er
 <i>Escribe /cancelar en cualquier momento para cancelar.</i>`)
 }
 
+// cancelKeywords son las palabras que cancelan cualquier flujo activo
+var cancelKeywords = []string{
+	"/cancelar", "cancelar", "cancel", "salir", "volver", "atras", "atrás",
+	"menu", "menú", "inicio", "stop", "exit", "no", "nada",
+}
+
 // handleConversationStep procesa el siguiente paso de una conversación en curso
 func (h *Handler) handleConversationStep(ctx context.Context, chatID, userID int64, userName, text string, state *ConversationState) error {
 	lower := strings.ToLower(strings.TrimSpace(text))
-	if lower == "/cancelar" || lower == "cancelar" {
-		h.conv.Clear(chatID, userID)
-		return h.tg.SendMessage(ctx, chatID, "❌ Operación cancelada.")
+
+	for _, kw := range cancelKeywords {
+		if lower == kw {
+			h.conv.Clear(chatID, userID)
+			return h.tg.SendMessage(ctx, chatID, "❌ Operación cancelada. Escribí /menu o «menu» para ver las opciones.")
+		}
 	}
 
 	switch state.Step {
@@ -152,6 +174,18 @@ func (h *Handler) handleConversationStep(ctx context.Context, chatID, userID int
 
 	case StepNewExpensePayer:
 		return h.resolvePayerFromText(ctx, chatID, userID, userName, text, state)
+
+	case StepSelectDivideExpense:
+		h.conv.Clear(chatID, userID)
+		// Intentar número primero
+		if n, err := strconv.Atoi(strings.TrimSpace(text)); err == nil {
+			if shortID, ok := state.DivideOptions[n]; ok {
+				return h.handleDivide(ctx, chatID, userID, []string{shortID})
+			}
+			return h.tg.SendMessage(ctx, chatID, fmt.Sprintf("❌ Opción %d no válida. Escribí «dividir» para ver la lista de nuevo.", n))
+		}
+		// Intentar como shortID directo
+		return h.handleDivide(ctx, chatID, userID, []string{strings.TrimSpace(text)})
 	}
 	return nil
 }
@@ -331,7 +365,7 @@ func (h *Handler) handleNaturalLanguage(ctx context.Context, chatID, userID int6
 		"2": func() error { return h.handleViewExpenses(ctx, chatID) },
 		"3": func() error { return h.handleMyDebts(ctx, chatID, userID) },
 		"4": func() error { return h.handleBalance(ctx, chatID) },
-		"5": func() error { return h.handleMenuDivide(ctx, chatID) },
+		"5": func() error { return h.handleMenuDivide(ctx, chatID, userID) },
 		"6": func() error { return h.handleSimplify(ctx, chatID) },
 		"7": func() error { return h.handleMembers(ctx, chatID) },
 		"8": func() error { return h.handleHelp(ctx, chatID) },
@@ -376,7 +410,7 @@ func (h *Handler) handleNaturalLanguage(ctx context.Context, chatID, userID int6
 		},
 		{
 			keywords: []string{"dividir gasto", "quiero dividir", "separar gasto", "dividir"},
-			action:   func() error { return h.handleMenuDivide(ctx, chatID) },
+			action:   func() error { return h.handleMenuDivide(ctx, chatID, userID) },
 		},
 		{
 			keywords: []string{"ayuda", "cómo funciona", "como funciona", "qué podés hacer", "que podes hacer", "comandos"},
