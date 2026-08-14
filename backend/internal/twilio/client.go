@@ -42,9 +42,20 @@ func (c *Client) SendMessage(ctx context.Context, chatID int64, text string) err
 	return c.sendRaw(ctx, to, StripHTML(text))
 }
 
-// SendMessageWithOptions envía un mensaje con opciones — ignora ReplyMarkup (no aplica en WhatsApp)
+// SendMessageWithOptions envía un mensaje con opciones. Para WhatsApp, serializa los botones como opciones numeradas.
 func (c *Client) SendMessageWithOptions(ctx context.Context, req *telegram.SendMessageRequest) error {
-	return c.SendMessage(ctx, req.ChatID, req.Text)
+	text := StripHTML(req.Text)
+	if keyboard, ok := req.ReplyMarkup.(telegram.InlineKeyboardMarkup); ok && len(keyboard.InlineKeyboard) > 0 {
+		n := 1
+		for _, row := range keyboard.InlineKeyboard {
+			for _, btn := range row {
+				text += fmt.Sprintf("\n%d. %s", n, btn.Text)
+				n++
+			}
+		}
+		text += "\n\nRespondé con el número de la opción."
+	}
+	return c.SendMessage(ctx, req.ChatID, text)
 }
 
 // EditMessageText en WhatsApp no existe edición — envía un nuevo mensaje

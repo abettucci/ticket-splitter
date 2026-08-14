@@ -325,6 +325,21 @@ func (h *Handler) createExpenseFromConversation(ctx context.Context, chatID, use
 func (h *Handler) handleNaturalLanguage(ctx context.Context, chatID, userID int64, userName, text string) error {
 	lower := strings.ToLower(strings.TrimSpace(text))
 
+	// Acceso por número (para WhatsApp donde no hay botones)
+	menuNumbers := map[string]func() error{
+		"1": func() error { return h.startExpenseFlow(ctx, chatID, userID) },
+		"2": func() error { return h.handleViewExpenses(ctx, chatID) },
+		"3": func() error { return h.handleMyDebts(ctx, chatID, userID) },
+		"4": func() error { return h.handleBalance(ctx, chatID) },
+		"5": func() error { return h.handleMenuDivide(ctx, chatID) },
+		"6": func() error { return h.handleSimplify(ctx, chatID) },
+		"7": func() error { return h.handleMembers(ctx, chatID) },
+		"8": func() error { return h.handleHelp(ctx, chatID) },
+	}
+	if fn, ok := menuNumbers[lower]; ok {
+		return fn()
+	}
+
 	type trigger struct {
 		keywords []string
 		action   func() error
@@ -332,15 +347,19 @@ func (h *Handler) handleNaturalLanguage(ctx context.Context, chatID, userID int6
 
 	triggers := []trigger{
 		{
-			keywords: []string{"nuevo gasto", "gasto nuevo", "agregar gasto", "anotar gasto", "cargar gasto", "registrar gasto"},
+			keywords: []string{"hola", "holi", "buenas", "buenos dias", "buenos días", "buen dia", "buen día"},
+			action:   func() error { return h.handleMenu(ctx, chatID) },
+		},
+		{
+			keywords: []string{"nuevo gasto", "gasto nuevo", "agregar gasto", "anotar gasto", "cargar gasto", "cargar un gasto", "registrar gasto", "sumar gasto", "nuevo", "gasto"},
 			action:   func() error { return h.startExpenseFlow(ctx, chatID, userID) },
 		},
 		{
-			keywords: []string{"ver gastos", "mis gastos", "lista de gastos", "gastos del grupo", "últimos gastos"},
+			keywords: []string{"ver gastos", "mis gastos", "lista de gastos", "gastos del grupo", "últimos gastos", "listar gastos"},
 			action:   func() error { return h.handleViewExpenses(ctx, chatID) },
 		},
 		{
-			keywords: []string{"mis deudas", "cuánto debo", "cuanto debo", "qué debo", "que debo", "deudas pendientes"},
+			keywords: []string{"mis deudas", "cuánto debo", "cuanto debo", "qué debo", "que debo", "deudas pendientes", "deudas"},
 			action:   func() error { return h.handleMyDebts(ctx, chatID, userID) },
 		},
 		{
@@ -356,7 +375,7 @@ func (h *Handler) handleNaturalLanguage(ctx context.Context, chatID, userID int6
 			action:   func() error { return h.handleMembers(ctx, chatID) },
 		},
 		{
-			keywords: []string{"dividir gasto", "quiero dividir", "separar gasto"},
+			keywords: []string{"dividir gasto", "quiero dividir", "separar gasto", "dividir"},
 			action:   func() error { return h.handleMenuDivide(ctx, chatID) },
 		},
 		{
@@ -378,5 +397,5 @@ func (h *Handler) handleNaturalLanguage(ctx context.Context, chatID, userID int6
 	}
 
 	// No match - suggest the menu
-	return h.tg.SendMessage(ctx, chatID, "🤖 No entendí eso. Usá /menu para ver todas las opciones disponibles.")
+	return h.tg.SendMessage(ctx, chatID, "🤖 No entendí eso. Escribí /menu o un número del 1 al 8 para ver las opciones.")
 }
