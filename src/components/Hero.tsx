@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Send, Calculator, Users, Shield } from "lucide-react";
+import { Link } from "react-router-dom";
 
 export const Hero = () => {
   const telegramBotUrl = "https://t.me/YourSplitBot"; // Reemplazar con tu bot
@@ -46,12 +47,11 @@ export const Hero = () => {
                 <Send className="mr-2 h-5 w-5" />
                 Abrir en Telegram
               </Button>
-              <Button 
-                size="lg" 
-                variant="outline" 
-                className="border-2 border-white text-white hover:bg-white/10 text-lg px-8 py-6 rounded-full"
-              >
-                Ver Demo
+              <Button asChild size="lg" variant="outline" className="border-2 border-white text-white hover:bg-white/10 text-lg px-8 py-6 rounded-full">
+                <Link to="/dividir">
+                  <Calculator className="mr-2 h-5 w-5" />
+                  Dividir online
+                </Link>
               </Button>
             </div>
             

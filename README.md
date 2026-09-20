@@ -15,6 +15,10 @@ Bot de Telegram para dividir gastos grupales de forma simple, segura y **100% gr
 - 📱 **Nativo de Telegram** - Sin apps adicionales
 - 🚀 **CI/CD Automatizado** - Deploy con GitHub Actions
 
+## 🗺️ Roadmap
+
+La V1 web agregará una división de gastos sin registro, guardada localmente en el navegador. La integración para pagar transferencias mediante Mercado Pago está planificada para una segunda versión: [ver diseño de V2](./ROADMAP_V2_MERCADO_PAGO.md).
+
 ## 🚀 Deploy Automático con GitHub Actions
 
 ### Paso 1: Fork/Clone el repositorio

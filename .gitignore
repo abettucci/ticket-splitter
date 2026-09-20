@@ -1,1 +1,3 @@
 backend/group-split-bot
+node_modules/
+dist/
