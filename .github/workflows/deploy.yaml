@@ -136,10 +136,18 @@ jobs:
           echo "  → Importing CloudWatch log groups..."
           terraform import aws_cloudwatch_log_group.lambda_logs /aws/lambda/splitbot-prod 2>/dev/null || true
           terraform import aws_cloudwatch_log_group.api_logs /aws/apigateway/splitbot-prod 2>/dev/null || true
+          terraform import aws_cloudwatch_log_group.reminder_worker_logs /aws/lambda/splitbot-prod-reminders 2>/dev/null || true
           
           # 5. Lambda Function
           echo "  → Importing Lambda function..."
           terraform import aws_lambda_function.bot splitbot-prod 2>/dev/null || true
+          terraform import aws_lambda_function.reminder_worker splitbot-prod-reminders 2>/dev/null || true
+
+          # 6.1 Reminder schedule resources (may exist after a partial apply)
+          echo "  → Importing reminder schedule..."
+          terraform import aws_cloudwatch_event_rule.reminder_worker splitbot-prod-reminders-hourly 2>/dev/null || true
+          terraform import aws_cloudwatch_event_target.reminder_worker splitbot-prod-reminders-hourly/reminder-worker 2>/dev/null || true
+          terraform import aws_lambda_permission.reminder_worker_eventbridge splitbot-prod-reminders/AllowEventBridgeInvokeReminders 2>/dev/null || true
           
           # 6. API Gateway v2 (HTTP API)
           echo "  → Importing API Gateway v2..."
@@ -176,6 +184,13 @@ jobs:
             if [ ! -z "$TWILIO_ROUTE_ID" ] && [ "$TWILIO_ROUTE_ID" != "None" ]; then
               echo "    ✓ Twilio Route ID: $TWILIO_ROUTE_ID"
               terraform import aws_apigatewayv2_route.twilio_inbound $API_ID/$TWILIO_ROUTE_ID 2>/dev/null || true
+            fi
+
+            # Import WhatsApp Web inbound route
+            WAWEB_ROUTE_ID=$(aws apigatewayv2 get-routes --api-id $API_ID --query "Items[?RouteKey=='POST /wa-web/inbound'].RouteId" --output text 2>/dev/null || echo "")
+            if [ ! -z "$WAWEB_ROUTE_ID" ] && [ "$WAWEB_ROUTE_ID" != "None" ]; then
+              echo "    ✓ WhatsApp Web Route ID: $WAWEB_ROUTE_ID"
+              terraform import aws_apigatewayv2_route.wa_web_inbound $API_ID/$WAWEB_ROUTE_ID 2>/dev/null || true
             fi
           else
             echo "    ℹ️ API Gateway not found (will be created)"
