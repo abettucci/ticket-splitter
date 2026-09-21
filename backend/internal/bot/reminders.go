@@ -171,7 +171,7 @@ Uso: /recordar_pago [descripción] [monto] [deudor] [acreedor] [cuotas] [frecuen
 	startDate = time.Date(startDate.Year(), startDate.Month(), startDate.Day(), 9, 0, 0, 0, startDate.Location())
 
 	// Crear recordatorio
-	reminder, err := h.db.CreateReminder(ctx, userID, description, amount, payeeName, "", installments, frequency, startDate, reminderType)
+	reminder, err := h.db.CreateReminder(ctx, userID, description, amount, payeeName, "", installments, frequency, startDate, reminderType, h.reminderChannel)
 	if err != nil {
 		h.logger.Printf("Error creating reminder: %v", err)
 		return h.tg.SendMessage(ctx, chatID, "❌ Error al crear el recordatorio.")

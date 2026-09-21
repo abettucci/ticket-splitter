@@ -45,11 +45,11 @@ var (
 		"185.76.151.0/24",
 	}
 
-	botHandler      *bot.Handler
-	waBotHandler    *bot.Handler
-	waWebBotHandler *bot.Handler // nil cuando WHATSAPP_WEB_ENABLED != "true"
+	botHandler       *bot.Handler
+	waBotHandler     *bot.Handler
+	waWebBotHandler  *bot.Handler // nil cuando WHATSAPP_WEB_ENABLED != "true"
 	twilioBotHandler *bot.Handler // nil cuando TWILIO_ACCOUNT_SID no está configurado
-	logger          *log.Logger
+	logger           *log.Logger
 )
 
 func init() {
@@ -63,23 +63,23 @@ func init() {
 
 	// Initialize Telegram client and handler
 	tgClient := telegram.NewClient()
-	botHandler = bot.NewHandler(dbClient, tgClient, logger)
+	botHandler = bot.NewHandler(dbClient, tgClient, logger, db.ReminderChannelTelegram)
 
 	// Initialize WhatsApp client and handler
 	waClient := whatsapp.NewClient()
-	waBotHandler = bot.NewHandler(dbClient, waClient, logger)
+	waBotHandler = bot.NewHandler(dbClient, waClient, logger, db.ReminderChannelWhatsAppCloud)
 
 	// Initialize Twilio WhatsApp client (optional, opt-in via env)
 	if os.Getenv("TWILIO_ACCOUNT_SID") != "" {
 		twilioClient := twilio.NewClient()
-		twilioBotHandler = bot.NewHandler(dbClient, twilioClient, logger)
+		twilioBotHandler = bot.NewHandler(dbClient, twilioClient, logger, db.ReminderChannelTwilio)
 		logger.Printf("Twilio WhatsApp channel enabled (from=%s)", os.Getenv("TWILIO_WHATSAPP_FROM"))
 	}
 
 	// Initialize WhatsApp Web client (optional, opt-in via env)
 	if os.Getenv("WHATSAPP_WEB_ENABLED") == "true" {
 		waWebClient := whatsappweb.NewClient()
-		waWebBotHandler = bot.NewHandler(dbClient, waWebClient, logger)
+		waWebBotHandler = bot.NewHandler(dbClient, waWebClient, logger, db.ReminderChannelWhatsAppWeb)
 		logger.Printf("WhatsApp Web channel enabled (sidecar=%s)", os.Getenv("WAWEB_SIDECAR_URL"))
 	}
 }
@@ -408,8 +408,8 @@ func handleTwilioInbound(ctx context.Context, request events.APIGatewayProxyRequ
 		return errorResponse(http.StatusBadRequest, "invalid body")
 	}
 
-	from := params.Get("From")       // "whatsapp:+5491122334455"
-	body := params.Get("Body")       // texto del mensaje
+	from := params.Get("From")        // "whatsapp:+5491122334455"
+	body := params.Get("Body")        // texto del mensaje
 	name := params.Get("ProfileName") // nombre del contacto en WhatsApp
 
 	if from == "" || body == "" {

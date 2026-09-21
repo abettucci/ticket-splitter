@@ -110,6 +110,17 @@ group-split-bot/
 | DynamoDB | 25GB gratis siempre |
 | **Total** | **$0/mes** |
 
+## 📲 Recordatorios por WhatsApp Web (prueba temporal)
+
+El sidecar de WhatsApp Web puede entregar recordatorios individuales que un usuario haya creado desde ese mismo canal. Es una integración de prueba: no usar para difusión ni para una operación productiva.
+
+1. Desplegá `whatsapp-web-sidecar` en un servicio persistente con volumen para `/data/wa-session` y vinculá la cuenta escaneando el QR.
+2. En GitHub Actions configurá los secretos `WAWEB_SIDECAR_URL` y `WAWEB_SHARED_SECRET`, y la variable de repositorio `WHATSAPP_WEB_REMINDERS_ENABLED` con el valor `true`.
+3. Después del deploy, obtené `terraform output -raw wa_web_backend_base_url` y usalo como `GO_BACKEND_URL` del sidecar. Conservá `INBOUND_PATH=/wa-web/inbound`.
+4. El usuario debe escribirle al bot por WhatsApp Web y crear su recordatorio con `/recordar_pago`. Con eso se guarda el canal, su número y el consentimiento de ese recordatorio. El worker horario lo enviará por el sidecar y deja de hacerlo al cancelar el recordatorio.
+
+Los recordatorios ya creados y los creados desde Telegram siguen entregándose por Telegram.
+
 ## 🔧 Desarrollo Local
 
 ```bash

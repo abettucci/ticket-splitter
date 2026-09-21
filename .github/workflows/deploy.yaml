@@ -14,6 +14,9 @@ env:
   TF_VAR_twilio_whatsapp_from: ${{ secrets.TWILIO_WHATSAPP_FROM }}
   TF_VAR_twilio_webhook_url: ${{ secrets.TWILIO_WEBHOOK_URL }}
   TF_VAR_twilio_skip_signature: ${{ secrets.TWILIO_SKIP_SIGNATURE }}
+  TF_VAR_whatsapp_web_reminders_enabled: ${{ vars.WHATSAPP_WEB_REMINDERS_ENABLED || 'false' }}
+  TF_VAR_waweb_sidecar_url: ${{ secrets.WAWEB_SIDECAR_URL }}
+  TF_VAR_waweb_shared_secret: ${{ secrets.WAWEB_SHARED_SECRET }}
   TF_VAR_environment: "prod"
   TF_VAR_project_name: "splitbot"
   AWS_REGION: ${{ secrets.AWS_REGION }}
@@ -49,11 +52,29 @@ jobs:
           echo "✅ Build complete!"
           ls -lh function.zip
 
+      - name: Build reminder worker Lambda
+        working-directory: ./reminder-worker
+        run: |
+          echo "📦 Downloading reminder worker dependencies..."
+          go mod download
+
+          echo "🔨 Building reminder worker for AWS Lambda (ARM64)..."
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build \
+            -tags lambda.norpc \
+            -ldflags="-s -w" \
+            -o bootstrap .
+
+          echo "📦 Creating reminder worker deployment package..."
+          zip function.zip bootstrap
+          ls -lh function.zip
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: lambda-package
-          path: backend/function.zip
+          name: lambda-packages
+          path: |
+            backend/function.zip
+            reminder-worker/function.zip
           retention-days: 1
 
   terraform-deploy:
@@ -69,12 +90,13 @@ jobs:
       - name: Download Lambda package
         uses: actions/download-artifact@v4
         with:
-          name: lambda-package
-          path: backend/
+          name: lambda-packages
+          path: .
 
       - name: Verify Lambda package
         run: |
           ls -lh backend/function.zip
+          ls -lh reminder-worker/function.zip
           echo "✅ Lambda package downloaded"
 
       - name: Configure AWS credentials

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="splitbot-blue" x1="8" y1="6" x2="56" y2="58" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#00A8E8"/>
+      <stop offset="1" stop-color="#005A87"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="url(#splitbot-blue)"/>
+  <path d="M19 20.5c0-3.04 2.46-5.5 5.5-5.5h15C42.54 15 45 17.46 45 20.5v15c0 3.04-2.46 5.5-5.5 5.5H31l-8.8 7.1c-1.3 1.05-3.2.12-3.2-1.55V41.2A5.5 5.5 0 0 1 15 35.9V20.5h4Z" fill="#fff" fill-opacity=".98"/>
+  <path d="M27 24h10M27 29h10M27 34h6" stroke="#0088CC" stroke-width="3" stroke-linecap="round"/>
+</svg>

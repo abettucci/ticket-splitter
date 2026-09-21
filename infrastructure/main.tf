@@ -96,6 +96,25 @@ variable "twilio_skip_signature" {
   sensitive   = true
 }
 
+variable "whatsapp_web_reminders_enabled" {
+  description = "Enable WhatsApp Web sidecar inbound messages and reminder delivery"
+  type        = bool
+  default     = false
+}
+
+variable "waweb_sidecar_url" {
+  description = "Base URL of the private WhatsApp Web sidecar"
+  type        = string
+  default     = ""
+}
+
+variable "waweb_shared_secret" {
+  description = "Shared secret used between the Lambda functions and the WhatsApp Web sidecar"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 
 variable "project_name" {
   description = "Project name"
@@ -212,7 +231,10 @@ resource "aws_iam_role_policy" "lambda_logs" {
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
-        Resource = "arn:aws:logs:${var.aws_region}:*:log-group:/aws/lambda/${local.function_name}:*"
+        Resource = [
+          "arn:aws:logs:${var.aws_region}:*:log-group:/aws/lambda/${local.function_name}:*",
+          "arn:aws:logs:${var.aws_region}:*:log-group:/aws/lambda/${local.function_name}-reminders:*"
+        ]
       }
     ]
   })
@@ -266,6 +288,15 @@ resource "aws_cloudwatch_log_group" "api_logs" {
   }
 }
 
+resource "aws_cloudwatch_log_group" "reminder_worker_logs" {
+  name              = "/aws/lambda/${local.function_name}-reminders"
+  retention_in_days = 14
+
+  tags = {
+    Name = "${local.function_name}-reminders"
+  }
+}
+
 # ============================================
 # LAMBDA FUNCTION
 # ============================================
@@ -295,6 +326,9 @@ resource "aws_lambda_function" "bot" {
       TWILIO_WHATSAPP_FROM    = var.twilio_whatsapp_from
       TWILIO_WEBHOOK_URL      = var.twilio_webhook_url
       TWILIO_SKIP_SIGNATURE   = var.twilio_skip_signature
+      WHATSAPP_WEB_ENABLED    = tostring(var.whatsapp_web_reminders_enabled)
+      WAWEB_SIDECAR_URL       = var.waweb_sidecar_url
+      WAWEB_SHARED_SECRET     = var.waweb_shared_secret
     }
   }
 
@@ -307,6 +341,64 @@ resource "aws_lambda_function" "bot" {
   tags = {
     Name = local.function_name
   }
+}
+
+# ============================================
+# REMINDER WORKER - ejecuta cada hora y entrega por Telegram o WhatsApp Web
+# ============================================
+
+resource "aws_lambda_function" "reminder_worker" {
+  function_name = "${local.function_name}-reminders"
+  role          = aws_iam_role.lambda_role.arn
+  handler       = "bootstrap"
+  runtime       = "provided.al2023"
+  architectures = ["arm64"]
+
+  filename         = "${path.module}/../reminder-worker/function.zip"
+  source_code_hash = filebase64sha256("${path.module}/../reminder-worker/function.zip")
+
+  memory_size = 128
+  timeout     = 30
+
+  environment {
+    variables = {
+      DYNAMODB_TABLE                  = aws_dynamodb_table.main.name
+      TELEGRAM_BOT_TOKEN              = var.telegram_bot_token
+      WHATSAPP_WEB_REMINDERS_ENABLED  = tostring(var.whatsapp_web_reminders_enabled)
+      WAWEB_SIDECAR_URL               = var.waweb_sidecar_url
+      WAWEB_SHARED_SECRET             = var.waweb_shared_secret
+    }
+  }
+
+  depends_on = [
+    aws_cloudwatch_log_group.reminder_worker_logs,
+    aws_iam_role_policy.lambda_logs,
+    aws_iam_role_policy.lambda_dynamodb,
+  ]
+
+  tags = {
+    Name = "${local.function_name}-reminders"
+  }
+}
+
+resource "aws_cloudwatch_event_rule" "reminder_worker" {
+  name                = "${local.function_name}-reminders-hourly"
+  description         = "Runs SplitBot payment reminders every hour"
+  schedule_expression = "rate(1 hour)"
+}
+
+resource "aws_cloudwatch_event_target" "reminder_worker" {
+  rule      = aws_cloudwatch_event_rule.reminder_worker.name
+  target_id = "reminder-worker"
+  arn       = aws_lambda_function.reminder_worker.arn
+}
+
+resource "aws_lambda_permission" "reminder_worker_eventbridge" {
+  statement_id  = "AllowEventBridgeInvokeReminders"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.reminder_worker.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.reminder_worker.arn
 }
 
 # ============================================
@@ -381,6 +473,12 @@ resource "aws_apigatewayv2_route" "webhook_get" {
 resource "aws_apigatewayv2_route" "twilio_inbound" {
   api_id    = aws_apigatewayv2_api.bot_api.id
   route_key = "POST /twilio/inbound"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+
+resource "aws_apigatewayv2_route" "wa_web_inbound" {
+  api_id    = aws_apigatewayv2_api.bot_api.id
+  route_key = "POST /wa-web/inbound"
   target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 }
 
@@ -480,6 +578,16 @@ output "webhook_url" {
 output "twilio_webhook_url" {
   description = "Twilio WhatsApp webhook URL — use this as TWILIO_WEBHOOK_URL"
   value       = "${aws_apigatewayv2_api.bot_api.api_endpoint}/twilio/inbound"
+}
+
+output "wa_web_backend_base_url" {
+  description = "WhatsApp Web sidecar backend base URL — set this as GO_BACKEND_URL and keep INBOUND_PATH=/wa-web/inbound"
+  value       = aws_apigatewayv2_api.bot_api.api_endpoint
+}
+
+output "reminder_worker_function_name" {
+  description = "Hourly reminder worker Lambda"
+  value       = aws_lambda_function.reminder_worker.function_name
 }
 
 output "webhook_secret" {

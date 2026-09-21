@@ -22,19 +22,25 @@ type Messenger interface {
 
 // Handler maneja los comandos del bot
 type Handler struct {
-	db     *db.Client
-	tg     Messenger
-	logger *log.Logger
-	conv   *ConversationManager
+	db              *db.Client
+	tg              Messenger
+	logger          *log.Logger
+	conv            *ConversationManager
+	reminderChannel string
 }
 
 // NewHandler crea un nuevo handler
-func NewHandler(dbClient *db.Client, messenger Messenger, logger *log.Logger) *Handler {
+func NewHandler(dbClient *db.Client, messenger Messenger, logger *log.Logger, reminderChannel string) *Handler {
+	if reminderChannel == "" {
+		reminderChannel = db.ReminderChannelTelegram
+	}
+
 	return &Handler{
-		db:     dbClient,
-		tg:     messenger,
-		logger: logger,
-		conv:   NewConversationManager(),
+		db:              dbClient,
+		tg:              messenger,
+		logger:          logger,
+		conv:            NewConversationManager(),
+		reminderChannel: reminderChannel,
 	}
 }
 
@@ -501,7 +507,7 @@ Ejemplos:
 
 	shortID := expense.ID[:8]
 	h.logChangelog(chatID, userID, userName, "expense", shortID, description, "created", map[string]string{
-		"monto":  telegram.FormatMoney(amount),
+		"monto":      telegram.FormatMoney(amount),
 		"pagado por": payerUserName,
 	})
 

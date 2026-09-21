@@ -26,6 +26,12 @@ const (
 	GSIGroupExpenses = "group-expenses-index"
 	GSIGroupMembers  = "group-members-index"
 	GSIUserSplits    = "user-splits-index"
+
+	// Reminder delivery channels. Empty channels in legacy records are treated as Telegram.
+	ReminderChannelTelegram      = "telegram"
+	ReminderChannelWhatsAppCloud = "whatsapp_cloud"
+	ReminderChannelTwilio        = "twilio_whatsapp"
+	ReminderChannelWhatsAppWeb   = "whatsapp_web"
 )
 
 // Client cliente de DynamoDB
@@ -161,6 +167,13 @@ type Reminder struct {
 	IsRecurring           bool      `dynamodbav:"is_recurring"`
 	CreatedAt             time.Time `dynamodbav:"created_at"`
 	LastNotifiedAt        time.Time `dynamodbav:"last_notified_at,omitempty"`
+	// Delivery metadata is captured when the user creates the reminder. DeliveryAddress
+	// is a Telegram chat ID or a WhatsApp phone number, depending on DeliveryChannel.
+	// NotificationOptIn is intentionally explicit so no WhatsApp Web reminder is sent
+	// unless the user created it through that channel.
+	DeliveryChannel   string `dynamodbav:"delivery_channel,omitempty"`
+	DeliveryAddress   int64  `dynamodbav:"delivery_address,omitempty"`
+	NotificationOptIn bool   `dynamodbav:"notification_opt_in"`
 	// GSI para buscar recordatorios pendientes por fecha
 	GSI2PK string `dynamodbav:"GSI2PK"` // REMINDER#PENDING
 	GSI2SK string `dynamodbav:"GSI2SK"` // DATE#<next_reminder_date>
@@ -1080,7 +1093,7 @@ func (c *Client) SimplifyDebts(ctx context.Context, chatID int64) (map[int64]map
 // ============================================
 
 // CreateReminder crea un nuevo recordatorio
-func (c *Client) CreateReminder(ctx context.Context, userID int64, description string, amount float64, payeeName, payeeUsername string, totalInstallments int, frequency string, startDate time.Time, reminderType string) (*Reminder, error) {
+func (c *Client) CreateReminder(ctx context.Context, userID int64, description string, amount float64, payeeName, payeeUsername string, totalInstallments int, frequency string, startDate time.Time, reminderType, deliveryChannel string) (*Reminder, error) {
 	reminderID := uuid.New().String()
 	pk := fmt.Sprintf("USER#%d", userID)
 	sk := fmt.Sprintf("REMINDER#%s", reminderID)
@@ -1104,6 +1117,9 @@ func (c *Client) CreateReminder(ctx context.Context, userID int64, description s
 	if reminderType == "" {
 		reminderType = "payment"
 	}
+	if deliveryChannel == "" {
+		deliveryChannel = ReminderChannelTelegram
+	}
 
 	reminder := &Reminder{
 		PK:                 pk,
@@ -1124,6 +1140,9 @@ func (c *Client) CreateReminder(ctx context.Context, userID int64, description s
 		IsActive:           true,
 		IsRecurring:        isRecurring,
 		CreatedAt:          time.Now(),
+		DeliveryChannel:    deliveryChannel,
+		DeliveryAddress:    userID,
+		NotificationOptIn:  true,
 		GSI2PK:             "REMINDER#PENDING",
 		GSI2SK:             fmt.Sprintf("DATE#%s", startDate.Format(time.RFC3339)),
 	}
@@ -1263,14 +1282,14 @@ func (c *Client) GetPendingReminders(ctx context.Context) ([]Reminder, error) {
 
 // ChangelogEntry representa un cambio en cualquier entidad del grupo
 type ChangelogEntry struct {
-	PK            string            `dynamodbav:"PK"`             // GROUP#<chat_id>
-	SK            string            `dynamodbav:"SK"`             // CHANGELOG#<timestamp>#<uuid>
+	PK            string            `dynamodbav:"PK"` // GROUP#<chat_id>
+	SK            string            `dynamodbav:"SK"` // CHANGELOG#<timestamp>#<uuid>
 	ID            string            `dynamodbav:"id"`
 	ChatID        int64             `dynamodbav:"chat_id"`
-	EntityType    string            `dynamodbav:"entity_type"`    // expense | reminder | member | split
-	EntityID      string            `dynamodbav:"entity_id"`      // ID del registro afectado
-	EntityName    string            `dynamodbav:"entity_name"`    // Descripción legible
-	Action        string            `dynamodbav:"action"`         // created | updated | deleted | restored | paid | divided
+	EntityType    string            `dynamodbav:"entity_type"` // expense | reminder | member | split
+	EntityID      string            `dynamodbav:"entity_id"`   // ID del registro afectado
+	EntityName    string            `dynamodbav:"entity_name"` // Descripción legible
+	Action        string            `dynamodbav:"action"`      // created | updated | deleted | restored | paid | divided
 	ChangedByID   int64             `dynamodbav:"changed_by_id"`
 	ChangedByName string            `dynamodbav:"changed_by_name"`
 	Changes       map[string]string `dynamodbav:"changes,omitempty"` // {"campo": "antes → después"}
