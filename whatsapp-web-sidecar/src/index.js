@@ -1,5 +1,7 @@
 import crypto from 'node:crypto';
 import express from 'express';
+import fs from 'node:fs';
+import path from 'node:path';
 import QRCode from 'qrcode';
 import pkg from 'whatsapp-web.js';
 
@@ -21,9 +23,15 @@ if (!GO_BACKEND_URL) {
   process.exit(1);
 }
 
+// Railway restarts can leave Chromium's singleton files in the persistent
+// LocalAuth profile. They are process locks, not WhatsApp credentials; keeping
+// them makes Chromium believe a browser is still running on another host.
+clearStaleChromiumLocks();
+
 const client = new Client({
   authStrategy: new LocalAuth({ dataPath: SESSION_PATH }),
   puppeteer: {
+    headless: true,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -216,10 +224,24 @@ function requireQRAuth(req, res, next) {
   next();
 }
 
+function clearStaleChromiumLocks() {
+  const profileDir = path.join(SESSION_PATH, 'session');
+  for (const lockName of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
+    try {
+      fs.rmSync(path.join(profileDir, lockName), { force: true });
+    } catch (error) {
+      console.warn(`Could not clear stale Chromium ${lockName}:`, error.message);
+    }
+  }
+}
+
 app.listen(PORT, () => console.log(`Sidecar listening on :${PORT}`));
 
 console.log('Initializing WhatsApp client...');
-client.initialize();
+client.initialize().catch((error) => {
+  console.error('WhatsApp client failed to initialize:', error);
+  process.exit(1);
+});
 
 process.on('SIGTERM', async () => {
   console.log('SIGTERM received, shutting down gracefully');
