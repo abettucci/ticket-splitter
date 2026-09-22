@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import express from 'express';
-import qrcode from 'qrcode-terminal';
+import QRCode from 'qrcode';
 import pkg from 'whatsapp-web.js';
 
 const { Client, LocalAuth } = pkg;
@@ -38,11 +38,11 @@ const client = new Client({
 });
 
 let isReady = false;
+let pendingQR = null;
 
 client.on('qr', (qr) => {
-  console.log('==== SCAN THIS QR WITH WHATSAPP (Linked devices > Link a device) ====');
-  qrcode.generate(qr, { small: true });
-  console.log('QR also raw (for backup):', qr);
+  pendingQR = qr;
+  console.log('WhatsApp QR available at the protected /qr endpoint.');
 });
 
 client.on('authenticated', () => {
@@ -55,11 +55,13 @@ client.on('auth_failure', (msg) => {
 
 client.on('ready', () => {
   isReady = true;
+  pendingQR = null;
   console.log('WhatsApp client ready');
 });
 
 client.on('disconnected', (reason) => {
   isReady = false;
+  pendingQR = null;
   console.error('WhatsApp client disconnected:', reason);
 });
 
@@ -132,6 +134,36 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true, ready: isReady });
 });
 
+// The QR grants a new device access to the linked WhatsApp account. Keep it
+// private: browsers prompt for HTTP Basic credentials, avoiding a secret in a
+// URL, history, or Railway logs. User: splitbot; password: SHARED_SECRET.
+app.get('/qr', requireQRAuth, async (_req, res) => {
+  if (!pendingQR) {
+    return res.status(isReady ? 410 : 404).json({
+      ok: false,
+      error: isReady ? 'no QR pending; WhatsApp is already linked' : 'QR not available yet',
+    });
+  }
+
+  try {
+    const svg = await QRCode.toString(pendingQR, {
+      type: 'svg',
+      errorCorrectionLevel: 'M',
+      margin: 2,
+      color: { dark: '#111827', light: '#ffffff' },
+    });
+    res.set({
+      'Cache-Control': 'no-store, no-cache, must-revalidate, private',
+      Pragma: 'no-cache',
+      'Referrer-Policy': 'no-referrer',
+    });
+    res.type('image/svg+xml').send(svg);
+  } catch (error) {
+    console.error('Failed to render WhatsApp QR:', error);
+    res.status(500).json({ ok: false, error: 'could not render QR' });
+  }
+});
+
 app.post('/send', async (req, res) => {
   const auth = req.headers.authorization || '';
   if (auth !== `Bearer ${SHARED_SECRET}`) {
@@ -168,6 +200,20 @@ function stripHtmlForWhatsApp(text) {
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>');
+}
+
+function requireQRAuth(req, res, next) {
+  const expected = `Basic ${Buffer.from(`splitbot:${SHARED_SECRET}`).toString('base64')}`;
+  const provided = req.headers.authorization || '';
+  const isAuthorized = provided.length === expected.length
+    && crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+
+  if (!isAuthorized) {
+    res.set('WWW-Authenticate', 'Basic realm="SplitBot WhatsApp QR", charset="UTF-8"');
+    return res.status(401).send('Authentication required');
+  }
+
+  next();
 }
 
 app.listen(PORT, () => console.log(`Sidecar listening on :${PORT}`));

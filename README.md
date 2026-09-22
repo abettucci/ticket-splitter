@@ -117,7 +117,8 @@ El sidecar de WhatsApp Web puede entregar recordatorios individuales que un usua
 1. Desplegá `whatsapp-web-sidecar` en un servicio persistente con volumen para `/data/wa-session` y vinculá la cuenta escaneando el QR.
 2. En GitHub Actions configurá los secretos `WAWEB_SIDECAR_URL` y `WAWEB_SHARED_SECRET`, y la variable de repositorio `WHATSAPP_WEB_REMINDERS_ENABLED` con el valor `true`.
 3. Después del deploy, obtené `terraform output -raw wa_web_backend_base_url` y usalo como `GO_BACKEND_URL` del sidecar. Conservá `INBOUND_PATH=/wa-web/inbound`.
-4. El usuario debe escribirle al bot por WhatsApp Web y crear su recordatorio con `/recordar_pago`. Con eso se guarda el canal, su número y el consentimiento de ese recordatorio. El worker horario lo enviará por el sidecar y deja de hacerlo al cancelar el recordatorio.
+4. Para vincular el teléfono, abrí `https://<dominio-sidecar>/qr`. El navegador pedirá autenticación HTTP Basic: usuario `splitbot` y como contraseña el mismo `SHARED_SECRET`. Escaneá el QR desde WhatsApp → Dispositivos vinculados → Vincular un dispositivo. El QR no se guarda ni se expone en los logs.
+5. El usuario debe escribirle al bot por WhatsApp Web y crear su recordatorio con `/recordar_pago`. Con eso se guarda el canal, su número y el consentimiento de ese recordatorio. El worker horario lo enviará por el sidecar y deja de hacerlo al cancelar el recordatorio.
 
 Los recordatorios ya creados y los creados desde Telegram siguen entregándose por Telegram.
 
