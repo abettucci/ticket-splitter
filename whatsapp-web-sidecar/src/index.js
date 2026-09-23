@@ -13,6 +13,7 @@ const GO_BACKEND_URL = process.env.GO_BACKEND_URL;
 const SESSION_PATH = process.env.SESSION_PATH || '/data/wa-session';
 const INBOUND_PATH = process.env.INBOUND_PATH || '/wa-web/inbound';
 const ALLOW_GROUPS = String(process.env.ALLOW_GROUPS || 'false').toLowerCase() === 'true';
+const QR_MAX_RETRIES = Math.max(1, Number.parseInt(process.env.QR_MAX_RETRIES || '1', 10) || 1);
 
 if (!SHARED_SECRET) {
   console.error('FATAL: SHARED_SECRET is required');
@@ -30,6 +31,10 @@ clearStaleChromiumLocks();
 
 const client = new Client({
   authStrategy: new LocalAuth({ dataPath: SESSION_PATH }),
+  // Avoid endless QR regeneration while an account is in WhatsApp's cooldown.
+  // After this limit the process stays up, but a manual Railway redeploy is
+  // required before another QR can be requested.
+  qrMaxRetries: QR_MAX_RETRIES,
   puppeteer: {
     headless: true,
     args: [
@@ -47,8 +52,10 @@ const client = new Client({
 
 let isReady = false;
 let pendingQR = null;
+let linkingPaused = false;
 
 client.on('qr', (qr) => {
+  linkingPaused = false;
   pendingQR = qr;
   console.log('WhatsApp QR available at the protected /qr endpoint.');
 });
@@ -70,6 +77,7 @@ client.on('ready', () => {
 client.on('disconnected', (reason) => {
   isReady = false;
   pendingQR = null;
+  linkingPaused = reason === 'Max qrcode retries reached';
   console.error('WhatsApp client disconnected:', reason);
 });
 
@@ -139,7 +147,7 @@ const app = express();
 app.use(express.json({ limit: '256kb' }));
 
 app.get('/health', (_req, res) => {
-  res.json({ ok: true, ready: isReady });
+  res.json({ ok: true, ready: isReady, linkingPaused });
 });
 
 // The QR grants a new device access to the linked WhatsApp account. Keep it
@@ -147,6 +155,12 @@ app.get('/health', (_req, res) => {
 // URL, history, or Railway logs. User: splitbot; password: SHARED_SECRET.
 app.get('/qr', requireQRAuth, async (_req, res) => {
   if (!pendingQR) {
+    if (linkingPaused) {
+      return res.status(429).json({
+        ok: false,
+        error: 'QR retry limit reached; wait for WhatsApp cooldown, then redeploy to request a new QR',
+      });
+    }
     return res.status(isReady ? 410 : 404).json({
       ok: false,
       error: isReady ? 'no QR pending; WhatsApp is already linked' : 'QR not available yet',
