@@ -26,7 +26,9 @@ ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm install --omit=dev --no-audit --no-fund
+# Use the public registry explicitly. The sidecar is a personal project and
+# must not inherit a developer machine's private npm registry in its lockfile.
+RUN npm ci --omit=dev --no-audit --no-fund --registry=https://registry.npmjs.org/
 
 COPY src ./src
 
