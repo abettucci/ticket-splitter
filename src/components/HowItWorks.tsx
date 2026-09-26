@@ -1,12 +1,12 @@
 import { Card, CardContent } from "@/components/ui/card";
-import { UserPlus, Receipt, Calculator, CheckCircle } from "lucide-react";
+import { UserPlus, Receipt, Calculator, Bell } from "lucide-react";
 
 const steps = [
   {
     icon: UserPlus,
     step: "1",
-    title: "Agrega el bot",
-    description: "Busca @SplitBot en Telegram y agrégalo a tu grupo. ¡Toma 5 segundos!"
+    title: "Sumalo al grupo",
+    description: "Agregá SplitBot a tu grupo de Telegram o WhatsApp. Cada integrante envía /start una vez."
   },
   {
     icon: Receipt,
@@ -21,16 +21,16 @@ const steps = [
     description: "El bot calcula automáticamente cuánto debe cada persona del grupo."
   },
   {
-    icon: CheckCircle,
+    icon: Bell,
     step: "4",
-    title: "Marca pagos",
-    description: "Cada miembro marca su pago cuando salda su deuda. Simple y transparente."
+    title: "Recordá y saldá",
+    description: "Mandá /recordar_deudas y el bot avisa por privado a quienes ya iniciaron su chat con él."
   }
 ];
 
 export const HowItWorks = () => {
   return (
-    <section className="py-20 bg-white">
+    <section id="how-it-works" className="py-20 bg-white">
       <div className="container mx-auto px-4">
         <div className="text-center mb-16">
           <h2 className="text-4xl lg:text-5xl font-bold text-slate-900 mb-6">
@@ -82,6 +82,7 @@ export const HowItWorks = () => {
               { cmd: "/mis_deudas", desc: "Ver tus deudas" },
               { cmd: "/pagar [id]", desc: "Marcar como pagado" },
               { cmd: "/balance", desc: "Ver balance grupal" },
+              { cmd: "/recordar_deudas", desc: "Avisar deudas por privado" },
             ].map((item, index) => (
               <div key={index} className="bg-slate-800 rounded-xl p-4">
                 <code className="text-cyan-400 font-mono text-sm">{item.cmd}</code>

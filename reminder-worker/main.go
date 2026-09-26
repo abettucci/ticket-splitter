@@ -42,7 +42,7 @@ func init() {
 
 // handler se ejecuta periódicamente (cada hora) vía EventBridge
 func handler(ctx context.Context) error {
-	logger.Println("🔔 Checking for pending reminders...")
+	logger.Println("🐀 Checking for pending reminders...")
 
 	// Obtener recordatorios pendientes
 	reminders, err := dbClient.GetPendingReminders(ctx)
@@ -63,7 +63,7 @@ func handler(ctx context.Context) error {
 			progress = "Pago único"
 		}
 
-		message := fmt.Sprintf(`🔔 <b>Recordatorio de Pago</b>
+		message := fmt.Sprintf(`🐀 <b>Recordatorio de Pago</b>
 
 📝 <b>%s</b>
 💰 Monto: $%.2f

@@ -24,7 +24,11 @@ func (h *Handler) handleMenu(ctx context.Context, chatID int64) error {
 			},
 			{
 				{Text: "➗ Dividir gasto", CallbackData: "menu:dividir"},
-				{Text: "💡 Simplificar", CallbackData: "menu:simplificar"},
+				{Text: "🔄 Redividir", CallbackData: "menu:redividir"},
+			},
+			{
+				{Text: "🐀 Recordatorios", CallbackData: "menu:recordatorios"},
+				{Text: "🐀 Avisar deudas", CallbackData: "menu:recordar_deudas"},
 			},
 			{
 				{Text: "👥 Miembros", CallbackData: "menu:miembros"},
@@ -56,8 +60,12 @@ func (h *Handler) handleMenuCallback(ctx context.Context, chatID, userID int64, 
 		return h.handleBalance(ctx, chatID)
 	case "dividir":
 		return h.handleMenuDivide(ctx, chatID, userID)
-	case "simplificar":
-		return h.handleSimplify(ctx, chatID)
+	case "redividir":
+		return h.handleMenuRedivide(ctx, chatID, userID)
+	case "recordatorios":
+		return h.handleMyReminders(ctx, chatID, userID)
+	case "recordar_deudas":
+		return h.handleRemindDebtors(ctx, chatID, userID)
 	case "miembros":
 		return h.handleMembers(ctx, chatID)
 	case "ayuda":
@@ -65,6 +73,49 @@ func (h *Handler) handleMenuCallback(ctx context.Context, chatID, userID int64, 
 	default:
 		return nil
 	}
+}
+
+// handleMenuRedivide muestra los gastos ya divididos. Elegir uno lo vuelve a
+// dividir entre todos los miembros actuales del grupo.
+func (h *Handler) handleMenuRedivide(ctx context.Context, chatID, userID int64) error {
+	expenses, err := h.db.GetGroupExpenses(ctx, chatID, 10)
+	if err != nil {
+		return h.tg.SendMessage(ctx, chatID, "❌ Error al obtener los gastos.")
+	}
+
+	var rows [][]telegram.InlineKeyboardButton
+	redivideOptions := map[int]string{}
+	n := 1
+	for _, exp := range expenses {
+		if !exp.IsDivided {
+			continue
+		}
+		shortID := exp.ID[:8]
+		label := fmt.Sprintf("🔄 %s — %s", exp.Description, telegram.FormatMoney(exp.TotalAmount))
+		if len(label) > 60 {
+			label = label[:57] + "..."
+		}
+		rows = append(rows, []telegram.InlineKeyboardButton{{
+			Text: label, CallbackData: fmt.Sprintf("redivide:%s", shortID),
+		}})
+		redivideOptions[n] = shortID
+		n++
+	}
+
+	if len(rows) == 0 {
+		return h.tg.SendMessage(ctx, chatID, "ℹ️ Todavía no hay gastos divididos para redividir.")
+	}
+	h.conv.Set(chatID, userID, &ConversationState{
+		Step:          StepSelectRedivideExpense,
+		DivideOptions: redivideOptions,
+	})
+
+	return h.tg.SendMessageWithOptions(ctx, &telegram.SendMessageRequest{
+		ChatID:      chatID,
+		Text:        "🔄 <b>¿Qué gasto querés redividir?</b>\n\nElegí uno para repartirlo entre los miembros actuales del grupo.",
+		ParseMode:   "HTML",
+		ReplyMarkup: telegram.InlineKeyboardMarkup{InlineKeyboard: rows},
+	})
 }
 
 // handleMenuDivide muestra los gastos pendientes de dividir como botones clickeables.
@@ -107,7 +158,7 @@ func (h *Handler) handleMenuDivide(ctx context.Context, chatID int64, userID ...
 
 	return h.tg.SendMessageWithOptions(ctx, &telegram.SendMessageRequest{
 		ChatID:      chatID,
-		Text:        "➗ <b>¿Qué gasto querés dividir?</b>\n\nTocá uno para dividirlo entre todos:",
+		Text:        "➗ <b>¿Qué gasto querés dividir?</b>\n\nElegí uno para dividirlo entre todos:",
 		ParseMode:   "HTML",
 		ReplyMarkup: telegram.InlineKeyboardMarkup{InlineKeyboard: rows},
 	})
@@ -186,6 +237,16 @@ func (h *Handler) handleConversationStep(ctx context.Context, chatID, userID int
 		}
 		// Intentar como shortID directo
 		return h.handleDivide(ctx, chatID, userID, []string{strings.TrimSpace(text)})
+
+	case StepSelectRedivideExpense:
+		h.conv.Clear(chatID, userID)
+		if n, err := strconv.Atoi(strings.TrimSpace(text)); err == nil {
+			if shortID, ok := state.DivideOptions[n]; ok {
+				return h.handleRedivide(ctx, chatID, userID, []string{shortID})
+			}
+			return h.tg.SendMessage(ctx, chatID, fmt.Sprintf("❌ Opción %d no válida. Pedí «redividir» para ver la lista de nuevo.", n))
+		}
+		return h.handleRedivide(ctx, chatID, userID, []string{strings.TrimSpace(text)})
 	}
 	return nil
 }
@@ -224,9 +285,9 @@ func (h *Handler) showPayerSelection(ctx context.Context, chatID, userID int64, 
 	}
 
 	return h.tg.SendMessageWithOptions(ctx, &telegram.SendMessageRequest{
-		ChatID:    chatID,
-		Text:      fmt.Sprintf("👤 ¿Quién pagó <b>%s</b>?\n\nElegí con los botones o escribí el nombre:", telegram.EscapeHTML(description)),
-		ParseMode: "HTML",
+		ChatID:      chatID,
+		Text:        fmt.Sprintf("👤 ¿Quién pagó <b>%s</b>?\n\nElegí con los botones o escribí el nombre:", telegram.EscapeHTML(description)),
+		ParseMode:   "HTML",
 		ReplyMarkup: telegram.InlineKeyboardMarkup{InlineKeyboard: rows},
 	})
 }
@@ -355,20 +416,24 @@ func (h *Handler) createExpenseFromConversation(ctx context.Context, chatID, use
 	})
 }
 
-// handleNaturalLanguage interpreta texto libre en chats privados
-func (h *Handler) handleNaturalLanguage(ctx context.Context, chatID, userID int64, userName, text string) error {
+// handleNaturalLanguage interpreta texto libre. En grupos solo se invoca al
+// mencionar Splitter, por lo que no interrumpe conversaciones ajenas.
+func (h *Handler) handleNaturalLanguage(ctx context.Context, chatID, userID int64, userName, text string, showMenuOnUnknown bool) error {
 	lower := strings.ToLower(strings.TrimSpace(text))
 
-	// Acceso por número (para WhatsApp donde no hay botones)
+	// Acceso por número: sirve de respaldo cuando una lista interactiva no se
+	// muestra en un cliente de WhatsApp.
 	menuNumbers := map[string]func() error{
-		"1": func() error { return h.startExpenseFlow(ctx, chatID, userID) },
-		"2": func() error { return h.handleViewExpenses(ctx, chatID) },
-		"3": func() error { return h.handleMyDebts(ctx, chatID, userID) },
-		"4": func() error { return h.handleBalance(ctx, chatID) },
-		"5": func() error { return h.handleMenuDivide(ctx, chatID, userID) },
-		"6": func() error { return h.handleSimplify(ctx, chatID) },
-		"7": func() error { return h.handleMembers(ctx, chatID) },
-		"8": func() error { return h.handleHelp(ctx, chatID) },
+		"1":  func() error { return h.startExpenseFlow(ctx, chatID, userID) },
+		"2":  func() error { return h.handleViewExpenses(ctx, chatID) },
+		"3":  func() error { return h.handleMyDebts(ctx, chatID, userID) },
+		"4":  func() error { return h.handleBalance(ctx, chatID) },
+		"5":  func() error { return h.handleMenuDivide(ctx, chatID, userID) },
+		"6":  func() error { return h.handleMenuRedivide(ctx, chatID, userID) },
+		"7":  func() error { return h.handleMyReminders(ctx, chatID, userID) },
+		"8":  func() error { return h.handleRemindDebtors(ctx, chatID, userID) },
+		"9":  func() error { return h.handleMembers(ctx, chatID) },
+		"10": func() error { return h.handleHelp(ctx, chatID) },
 	}
 	if fn, ok := menuNumbers[lower]; ok {
 		return fn()
@@ -413,6 +478,18 @@ func (h *Handler) handleNaturalLanguage(ctx context.Context, chatID, userID int6
 			action:   func() error { return h.handleMenuDivide(ctx, chatID, userID) },
 		},
 		{
+			keywords: []string{"redividir", "volver a dividir", "repartir de nuevo"},
+			action:   func() error { return h.handleMenuRedivide(ctx, chatID, userID) },
+		},
+		{
+			keywords: []string{"mis recordatorios", "ver recordatorios", "recordatorios", "recordatorio"},
+			action:   func() error { return h.handleMyReminders(ctx, chatID, userID) },
+		},
+		{
+			keywords: []string{"recordar deudas", "avisar deudas", "recordarles", "avisales", "avisar a los deudores"},
+			action:   func() error { return h.handleRemindDebtors(ctx, chatID, userID) },
+		},
+		{
 			keywords: []string{"ayuda", "cómo funciona", "como funciona", "qué podés hacer", "que podes hacer", "comandos"},
 			action:   func() error { return h.handleHelp(ctx, chatID) },
 		},
@@ -430,6 +507,10 @@ func (h *Handler) handleNaturalLanguage(ctx context.Context, chatID, userID int6
 		}
 	}
 
+	if showMenuOnUnknown {
+		return h.handleMenu(ctx, chatID)
+	}
+
 	// No match - suggest the menu
-	return h.tg.SendMessage(ctx, chatID, "🤖 No entendí eso. Escribí /menu o un número del 1 al 8 para ver las opciones.")
+	return h.tg.SendMessage(ctx, chatID, "🤖 No entendí eso. Escribí /menu o pedime una opción como «nuevo gasto», «recordatorios» o «balance».")
 }

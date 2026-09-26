@@ -1,4 +1,4 @@
-import { Send, Github, Twitter, Shield } from "lucide-react";
+import { Send, Github, Twitter, Shield, MessageCircle } from "lucide-react";
 
 export const Footer = () => {
   return (
@@ -13,7 +13,7 @@ export const Footer = () => {
               <span className="text-2xl font-bold">SplitBot</span>
             </div>
             <p className="text-slate-400 mb-6 max-w-md">
-              La forma más simple de dividir gastos en Telegram. 100% gratis, sin ads, sin tracking. Open source.
+              La forma más simple de dividir gastos en Telegram y WhatsApp. Sin ads, sin tracking y pensada para tus grupos.
             </p>
             <div className="flex gap-4">
               <a 
@@ -40,6 +40,12 @@ export const Footer = () => {
               >
                 <Send className="h-5 w-5" />
               </a>
+              <div
+                title="WhatsApp Web y grupos disponibles"
+                className="bg-emerald-500/15 border border-emerald-400/30 p-3 rounded-xl text-emerald-300"
+              >
+                <MessageCircle className="h-5 w-5" />
+              </div>
             </div>
           </div>
           
@@ -48,7 +54,8 @@ export const Footer = () => {
             <ul className="space-y-3 text-slate-400">
               <li><a href="#features" className="hover:text-[#0088cc] transition-colors">Características</a></li>
               <li><a href="#how-it-works" className="hover:text-[#0088cc] transition-colors">Cómo funciona</a></li>
-              <li><a href="https://t.me/YourSplitBot" className="hover:text-[#0088cc] transition-colors">Abrir bot</a></li>
+              <li><a href="https://t.me/YourSplitBot" className="hover:text-[#0088cc] transition-colors">Abrir en Telegram</a></li>
+              <li><span className="text-emerald-300">WhatsApp Web + grupos</span></li>
               <li><a href="https://github.com/tu-usuario/group-split-bot" className="hover:text-[#0088cc] transition-colors">Código fuente</a></li>
             </ul>
           </div>

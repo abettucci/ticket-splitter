@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Send, Calculator, Users, Shield } from "lucide-react";
+import { Send, Calculator, Users, Shield, MessageCircle } from "lucide-react";
 import { Link } from "react-router-dom";
 
 export const Hero = () => {
@@ -27,15 +27,15 @@ export const Hero = () => {
             </div>
 
             <h1 className="text-5xl lg:text-7xl font-bold text-white mb-6 leading-tight">
-              Divide gastos en
+              Divide gastos en tus
               <span className="block bg-gradient-to-r from-white to-cyan-200 bg-clip-text text-transparent">
-                Telegram
+                chats de grupo
               </span>
             </h1>
             
             <p className="text-xl lg:text-2xl text-white/90 mb-8 leading-relaxed">
-              El bot inteligente que gestiona todos los gastos compartidos de tu grupo. 
-              <span className="font-semibold"> Sin apps adicionales, sin complicaciones, totalmente gratis.</span>
+              Registrá, dividí y seguí gastos compartidos desde Telegram o WhatsApp.
+              <span className="font-semibold"> Sin registros para empezar, sin planillas y sin complicaciones.</span>
             </p>
             
             <div className="flex flex-col sm:flex-row gap-4 justify-center lg:justify-start mb-12">
@@ -54,6 +54,17 @@ export const Hero = () => {
                 </Link>
               </Button>
             </div>
+
+            <div className="flex flex-wrap gap-3 justify-center lg:justify-start mb-8">
+              <div className="inline-flex items-center gap-2 rounded-full border border-white/25 bg-white/10 px-4 py-2 text-sm text-white">
+                <Send className="h-4 w-4 text-sky-200" />
+                Telegram
+              </div>
+              <div className="inline-flex items-center gap-2 rounded-full border border-emerald-300/40 bg-emerald-400/15 px-4 py-2 text-sm text-white">
+                <MessageCircle className="h-4 w-4 text-emerald-200" />
+                WhatsApp y grupos
+              </div>
+            </div>
             
             <div className="flex flex-wrap justify-center lg:justify-start gap-8 text-white/90">
               <div className="flex items-center gap-2">
@@ -66,23 +77,23 @@ export const Hero = () => {
               </div>
               <div className="flex items-center gap-2">
                 <Send className="h-5 w-5" />
-                <span>100% en Telegram</span>
+                <span>Telegram + WhatsApp</span>
               </div>
             </div>
           </div>
           
           <div className="relative">
             <Card className="bg-white/10 backdrop-blur-md p-8 shadow-2xl rounded-3xl border border-white/20">
-              {/* Mock de chat de Telegram */}
+              {/* Mock de chat grupal */}
               <div className="bg-[#17212b] rounded-2xl overflow-hidden shadow-lg">
                 {/* Header del chat */}
                 <div className="bg-[#232e3c] px-4 py-3 flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-cyan-400 to-blue-500 flex items-center justify-center">
+                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-emerald-400 to-cyan-500 flex items-center justify-center">
                     <span className="text-white font-bold">S</span>
                   </div>
                   <div>
-                    <div className="text-white font-semibold">SplitBot</div>
-                    <div className="text-gray-400 text-sm">bot</div>
+                    <div className="text-white font-semibold">Viaje a Córdoba</div>
+                    <div className="text-gray-400 text-sm">SplitBot · WhatsApp</div>
                   </div>
                 </div>
                 
@@ -102,7 +113,7 @@ export const Hero = () => {
                       <div className="space-y-1 text-sm">
                         <div>📝 <span className="font-semibold">Cena</span></div>
                         <div>💰 Monto: $15,000</div>
-                        <div>👤 Creado por: Juan</div>
+                        <div>👤 Pagado por: Juan</div>
                         <div>🆔 ID: a1b2c3d4</div>
                       </div>
                       <div className="text-gray-400 text-xs mt-2">
@@ -127,6 +138,13 @@ export const Hero = () => {
                         <div>👥 Participantes: 3</div>
                         <div className="text-cyan-400 font-semibold">💵 Por persona: $5,000</div>
                       </div>
+                    </div>
+                  </div>
+
+                  <div className="flex justify-start">
+                    <div className="bg-[#182533] text-white px-4 py-3 rounded-2xl rounded-bl-md max-w-[85%]">
+                      <div className="mb-1 font-semibold">🐀 Recordatorio enviado</div>
+                      <div className="text-sm text-emerald-300">A cada deudor por privado</div>
                     </div>
                   </div>
                 </div>

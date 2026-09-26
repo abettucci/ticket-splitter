@@ -5,15 +5,18 @@ import path from 'node:path';
 import QRCode from 'qrcode';
 import pkg from 'whatsapp-web.js';
 
-const { Client, LocalAuth } = pkg;
+const { Client, List, LocalAuth } = pkg;
 
 const PORT = Number(process.env.PORT || 3000);
 const SHARED_SECRET = process.env.SHARED_SECRET;
 const GO_BACKEND_URL = process.env.GO_BACKEND_URL;
 const SESSION_PATH = process.env.SESSION_PATH || '/data/wa-session';
 const INBOUND_PATH = process.env.INBOUND_PATH || '/wa-web/inbound';
-const ALLOW_GROUPS = String(process.env.ALLOW_GROUPS || 'false').toLowerCase() === 'true';
+// Group expense splitting is enabled by default. Set ALLOW_GROUPS=false only to
+// temporarily pause group traffic without unlinking the WhatsApp account.
+const ALLOW_GROUPS = String(process.env.ALLOW_GROUPS || 'true').toLowerCase() === 'true';
 const QR_MAX_RETRIES = Math.max(1, Number.parseInt(process.env.QR_MAX_RETRIES || '1', 10) || 1);
+const INBOUND_CHAT_JIDS_PATH = path.join(SESSION_PATH, 'inbound-chat-jids.json');
 
 if (!SHARED_SECRET) {
   console.error('FATAL: SHARED_SECRET is required');
@@ -54,9 +57,9 @@ let isReady = false;
 let pendingQR = null;
 let linkingPaused = false;
 // WhatsApp may identify private chats by phone (`@c.us`) or by a Linked ID
-// (`@lid`). Keep the real JID received from WhatsApp so replies target the
-// same conversation instead of assuming every private chat is `@c.us`.
-const inboundChatJIDs = new Map();
+// (`@lid`). Persist the real JID on the Railway volume so direct debt
+// reminders still work after a sidecar restart.
+const inboundChatJIDs = loadInboundChatJIDs();
 
 client.on('qr', (qr) => {
   linkingPaused = false;
@@ -93,28 +96,58 @@ client.on('message', async (msg) => {
     const isGroup = msg.from.endsWith('@g.us');
     if (isGroup && !ALLOW_GROUPS) return;
 
-    const rawId = msg.from.replace(/@(c\.us|g\.us|lid)$/, '');
+    const rawId = jidToRawID(msg.from);
     const chatId = Number(rawId);
     if (!Number.isSafeInteger(chatId)) {
       console.warn('Cannot parse chat id from', msg.from);
       return;
     }
-    inboundChatJIDs.set(chatKey(chatId, isGroup ? 'group' : 'private'), msg.from);
 
-    let displayName = rawId;
+    const senderJid = isGroup ? msg.author : msg.from;
+    const senderRawID = jidToRawID(senderJid);
+    const senderId = Number(senderRawID);
+    if (!Number.isSafeInteger(senderId)) {
+      console.warn('Cannot parse sender id from', senderJid);
+      return;
+    }
+
+    rememberInboundChat(chatId, isGroup ? 'group' : 'private', msg.from);
+    if (!isGroup) {
+      rememberInboundChat(senderId, 'private', senderJid);
+    }
+
+    let displayName = senderRawID;
     try {
       const contact = await msg.getContact();
-      displayName = contact.pushname || contact.name || contact.number || rawId;
+      displayName = contact.pushname || contact.name || contact.number || senderRawID;
     } catch (e) {
       console.warn('Could not fetch contact for', msg.from, e.message);
     }
+
+    let chatName = '';
+    if (isGroup) {
+      try {
+        const chat = await msg.getChat();
+        chatName = chat.name || '';
+      } catch (e) {
+        console.warn('Could not fetch group metadata for', msg.from, e.message);
+      }
+    }
+
+    const interactiveID = getInteractiveID(msg);
+    const isMentioned = isGroup && messageMentionsClient(msg);
 
     const payload = {
       chat_id: chatId,
       raw_jid: msg.from,
       chat_type: isGroup ? 'group' : 'private',
+      chat_name: chatName,
+      sender_id: senderId,
+      sender_jid: senderJid,
       from_name: displayName,
       text: msg.body || '',
+      interactive_id: interactiveID,
+      is_mentioned: isMentioned,
       message_id: msg.id?._serialized || '',
       timestamp: msg.timestamp || Math.floor(Date.now() / 1000),
     };
@@ -200,7 +233,7 @@ app.post('/send', async (req, res) => {
     return res.status(503).json({ ok: false, error: 'client not ready' });
   }
 
-  const { chat_id, chat_type, text } = req.body || {};
+  const { chat_id, chat_type, text, interactive } = req.body || {};
   if (!chat_id || !text) {
     return res.status(400).json({ ok: false, error: 'missing chat_id or text' });
   }
@@ -211,8 +244,26 @@ app.post('/send', async (req, res) => {
 
   try {
     const sanitized = stripHtmlForWhatsApp(String(text));
+    if (isListRequest(interactive)) {
+      try {
+        const list = new List(
+          sanitized,
+          String(interactive.button_text || 'Ver opciones'),
+          [{ title: String(interactive.title || 'Splitter'), rows: interactive.rows }],
+          String(interactive.title || 'Splitter'),
+          String(interactive.footer || ''),
+        );
+        await client.sendMessage(jid, list);
+        return res.json({ ok: true, interactive: 'list' });
+      } catch (interactiveError) {
+        // Interactive messages are not equally supported by every WhatsApp Web
+        // build. The numbered text sent by Go remains a fully functional
+        // fallback, so do not fail a user action merely because the list did.
+        console.warn('Interactive list failed; sending text fallback:', interactiveError.message);
+      }
+    }
     await client.sendMessage(jid, sanitized);
-    res.json({ ok: true });
+    res.json({ ok: true, interactive: 'text' });
   } catch (e) {
     console.error('Send failed:', e);
     res.status(500).json({ ok: false, error: e.message });
@@ -230,8 +281,83 @@ function stripHtmlForWhatsApp(text) {
     .replace(/&gt;/g, '>');
 }
 
+function isListRequest(interactive) {
+  return interactive
+    && interactive.type === 'list'
+    && Array.isArray(interactive.rows)
+    && interactive.rows.length > 0
+    && interactive.rows.length <= 10
+    && interactive.rows.every((row) => row && typeof row.id === 'string' && typeof row.title === 'string');
+}
+
+function getInteractiveID(msg) {
+  // whatsapp-web.js has exposed these fields under different names across
+  // WhatsApp Web versions. Keep the extraction defensive so a normal text
+  // message can never be interpreted as a bot action.
+  const candidates = [
+    msg.selectedRowId,
+    msg.selectedButtonId,
+    msg.rawData?.selectedRowId,
+    msg.rawData?.selectedButtonId,
+    msg.rawData?.listResponseMessage?.singleSelectReply?.selectedRowId,
+    msg.rawData?.buttonsResponseMessage?.selectedButtonId,
+  ];
+  return candidates.find((value) => typeof value === 'string' && value.length > 0) || '';
+}
+
+function messageMentionsClient(msg) {
+  const ownJid = client.info?.wid?._serialized;
+  if (!ownJid || !Array.isArray(msg.mentionedIds)) return false;
+  return msg.mentionedIds.some((mentionedJid) => sameWhatsAppIdentity(mentionedJid, ownJid));
+}
+
+function sameWhatsAppIdentity(left, right) {
+  const leftRaw = jidToRawID(left);
+  const rightRaw = jidToRawID(right);
+  return left === right || (leftRaw !== '' && leftRaw === rightRaw);
+}
+
 function chatKey(chatId, chatType) {
   return `${chatType}:${chatId}`;
+}
+
+function jidToRawID(jid) {
+  return String(jid || '').replace(/@(c\.us|g\.us|lid)$/, '');
+}
+
+function rememberInboundChat(chatId, chatType, jid) {
+  inboundChatJIDs.set(chatKey(chatId, chatType), jid);
+  if (chatType === 'private') {
+    persistInboundChatJIDs();
+  }
+}
+
+function loadInboundChatJIDs() {
+  try {
+    const raw = fs.readFileSync(INBOUND_CHAT_JIDS_PATH, 'utf8');
+    const entries = JSON.parse(raw);
+    if (!Array.isArray(entries)) {
+      throw new Error('expected an array');
+    }
+    return new Map(entries.filter(([key, jid]) => typeof key === 'string' && typeof jid === 'string'));
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      console.warn('Could not restore persisted chat addresses:', error.message);
+    }
+    return new Map();
+  }
+}
+
+function persistInboundChatJIDs() {
+  const temporaryPath = `${INBOUND_CHAT_JIDS_PATH}.tmp`;
+  try {
+    fs.mkdirSync(SESSION_PATH, { recursive: true });
+    fs.writeFileSync(temporaryPath, JSON.stringify([...inboundChatJIDs]), { mode: 0o600 });
+    fs.renameSync(temporaryPath, INBOUND_CHAT_JIDS_PATH);
+  } catch (error) {
+    console.warn('Could not persist chat addresses:', error.message);
+    try { fs.rmSync(temporaryPath, { force: true }); } catch (_) {}
+  }
 }
 
 function requireQRAuth(req, res, next) {

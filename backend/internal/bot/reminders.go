@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	_ "time/tzdata"
 
 	"github.com/abettucci/group-split-bot/internal/db"
 	"github.com/abettucci/group-split-bot/internal/telegram"
@@ -21,7 +22,7 @@ func (h *Handler) handleCreateReminder(ctx context.Context, chatID, userID int64
 	if len(args) < 4 {
 		return h.tg.SendMessage(ctx, chatID, `❌ <b>Formato incorrecto</b>
 
-Uso: /recordar_pago [descripción] [monto] [deudor] [acreedor] [cuotas] [frecuencia] [fecha]
+	Uso: /recordar_pago [descripción] [monto] [deudor] [acreedor] [cuotas] [frecuencia] [fecha] [hora]
 
 <b>Parámetros:</b>
 • <b>descripción</b> - Puede tener espacios (ej: Cuota ACDC)
@@ -31,6 +32,7 @@ Uso: /recordar_pago [descripción] [monto] [deudor] [acreedor] [cuotas] [frecuen
 • <b>cuotas</b> - Número de cuotas (opcional, default: 1)
 • <b>frecuencia</b> - monthly, weekly, daily, once (opcional)
 • <b>fecha</b> - Cuándo empieza (opcional)
+• <b>hora</b> - Hora del recordatorio en Argentina, HH:MM (opcional, default: 09:00)
 
 <b>Frecuencias:</b>
 • monthly - Mensual | weekly - Semanal
@@ -56,11 +58,14 @@ Uso: /recordar_pago [descripción] [monto] [deudor] [acreedor] [cuotas] [frecuen
   <i>(Juan me debe en 6 cuotas mensuales)</i>
 
 • /recordar_pago Alquiler depto 150000 yo Inmobiliaria 12 monthly primero_del_mes
-  <i>(Yo pago alquiler el 1ro de cada mes)</i>`)
+  <i>(Yo pago alquiler el 1ro de cada mes)</i>
+
+• /recordar_pago Regalo 30000 yo Nico 1 once 30/09/2026 18:30
+  <i>(Me recuerda el 30/09 a las 18:30, horario de Argentina)</i>`)
 	}
 
 	// Parsear argumentos: buscar el monto (primer número) para separar descripción del resto
-	// Formato: [descripción con espacios] [monto] [deudor] [acreedor] [cuotas] [frecuencia] [fecha]
+	// Formato: [descripción con espacios] [monto] [deudor] [acreedor] [cuotas] [frecuencia] [fecha] [hora]
 
 	var description string
 	var amountStr string
@@ -99,6 +104,7 @@ Uso: /recordar_pago [descripción] [monto] [deudor] [acreedor] [cuotas] [frecuen
 	var installmentsStr string = "1"
 	var frequency string = "monthly"
 	var startDateStr string = ""
+	var reminderTimeStr string = "09:00"
 
 	if len(remainingArgs) >= 3 {
 		installmentsStr = remainingArgs[2]
@@ -108,6 +114,12 @@ Uso: /recordar_pago [descripción] [monto] [deudor] [acreedor] [cuotas] [frecuen
 	}
 	if len(remainingArgs) >= 5 {
 		startDateStr = remainingArgs[4]
+	}
+	if len(remainingArgs) >= 6 {
+		reminderTimeStr = remainingArgs[5]
+	}
+	if len(remainingArgs) > 6 {
+		return h.tg.SendMessage(ctx, chatID, "❌ Hay argumentos de más. La hora debe ser el último dato, con formato HH:MM.\n\nEjemplo: /recordar_pago Regalo 30000 yo Nico 1 once 30/09/2026 18:30")
 	}
 
 	// Determinar tipo de recordatorio y nombres
@@ -155,20 +167,31 @@ Uso: /recordar_pago [descripción] [monto] [deudor] [acreedor] [cuotas] [frecuen
 		return h.tg.SendMessage(ctx, chatID, "❌ El número de cuotas debe ser un número mayor a 0.")
 	}
 
+	reminderHour, reminderMinute, err := parseReminderTime(reminderTimeStr)
+	if err != nil {
+		return h.tg.SendMessage(ctx, chatID, "❌ Hora inválida. Usá el formato HH:MM en horario de Argentina.\n\nEjemplo: 18:30")
+	}
+
+	argentinaLocation, err := time.LoadLocation("America/Argentina/Buenos_Aires")
+	if err != nil {
+		h.logger.Printf("Error loading Argentina timezone: %v", err)
+		return h.tg.SendMessage(ctx, chatID, "❌ No se pudo configurar la zona horaria del recordatorio.")
+	}
+
 	// Parsear fecha de inicio
 	var startDate time.Time
 	if startDateStr != "" {
-		startDate, err = parseFlexibleDate(startDateStr)
+		startDate, err = parseFlexibleDateInLocation(startDateStr, argentinaLocation)
 		if err != nil {
 			return h.tg.SendMessage(ctx, chatID, fmt.Sprintf("❌ Fecha inválida: %v\n\nUsa formatos como: 15/01/2026, mañana, hoy, proximo_lunes", err))
 		}
 	} else {
-		// Por defecto, mañana a las 9 AM
-		startDate = time.Now().AddDate(0, 0, 1)
+		// Por defecto, mañana en horario de Argentina.
+		startDate = time.Now().In(argentinaLocation).AddDate(0, 0, 1)
 	}
 
-	// Asegurarse de que la hora sea las 9 AM
-	startDate = time.Date(startDate.Year(), startDate.Month(), startDate.Day(), 9, 0, 0, 0, startDate.Location())
+	// La fecha y hora se almacenan en la zona horaria argentina.
+	startDate = time.Date(startDate.Year(), startDate.Month(), startDate.Day(), reminderHour, reminderMinute, 0, 0, argentinaLocation)
 
 	// Crear recordatorio
 	reminder, err := h.db.CreateReminder(ctx, userID, description, amount, payeeName, "", installments, frequency, startDate, reminderType, h.reminderChannel)
@@ -217,10 +240,11 @@ Uso: /recordar_pago [descripción] [monto] [deudor] [acreedor] [cuotas] [frecuen
 💰 Monto: %s
 👤 %s: %s
 📅 %s
-⏰ Primer recordatorio: %s
+⏰ Programado desde: %s
 🆔 ID: <code>%s</code>
 
 <i>%s</i>
+<i>Los envíos se procesan una vez por hora, por lo que pueden llegar hasta 59 minutos después de la hora programada.</i>
 
 Usa /mis_recordatorios para ver todos tus recordatorios.`,
 		typeEmoji,
@@ -255,7 +279,7 @@ func (h *Handler) handleMyReminders(ctx context.Context, chatID, userID int64) e
 	}
 
 	var sb strings.Builder
-	sb.WriteString("🔔 <b>Tus recordatorios activos</b>\n\n")
+	sb.WriteString("🐀 <b>Tus recordatorios activos</b>\n\n")
 
 	for i, reminder := range reminders {
 		shortID := reminder.ID[:8]
@@ -349,7 +373,7 @@ func (h *Handler) handleRemindDebtors(ctx context.Context, chatID, userID int64)
 
 	debtorsCount := 0
 	for _, member := range members {
-		splits, err := h.db.GetUserPendingSplits(ctx, member.UserID)
+		splits, err := h.db.GetUserPendingSplitsForGroup(ctx, member.UserID, chatID)
 		if err != nil || len(splits) == 0 {
 			continue
 		}
@@ -363,7 +387,7 @@ func (h *Handler) handleRemindDebtors(ctx context.Context, chatID, userID int64)
 			debtorsCount++
 
 			// Enviar mensaje privado al deudor
-			debtMessage := fmt.Sprintf(`🔔 <b>Recordatorio de Deudas</b>
+			debtMessage := fmt.Sprintf(`🐀 <b>Recordatorio de Deudas</b>
 
 Hola %s, tienes deudas pendientes en el grupo.
 
@@ -374,8 +398,25 @@ Usa /pagar [id] para marcar como pagado.`,
 				telegram.EscapeHTML(member.DisplayName),
 				telegram.FormatMoney(totalDebt))
 
-			// Intentar enviar mensaje privado
-			err = h.tg.SendMessage(ctx, member.UserID, debtMessage)
+			// WhatsApp Web requires an explicit direct-chat opt-in. A group member
+			// is never contacted privately until they have started a 1:1 chat.
+			destination := member.UserID
+			if h.reminderChannel == db.ReminderChannelWhatsAppWeb {
+				contact, contactErr := h.db.GetWhatsAppWebContact(ctx, member.UserID)
+				if contactErr != nil {
+					h.logger.Printf("Error getting WhatsApp Web contact for user %d: %v", member.UserID, contactErr)
+					sb.WriteString(fmt.Sprintf("⚠️ %s - No se pudo verificar el chat privado\n", member.DisplayName))
+					continue
+				}
+				if contact == nil || !contact.NotificationOptIn {
+					sb.WriteString(fmt.Sprintf("⚠️ %s - Debe iniciar el chat privado con el bot y enviar /start\n", member.DisplayName))
+					continue
+				}
+				destination = contact.DirectChatID
+			}
+
+			// Intentar enviar mensaje privado.
+			err = h.tg.SendMessage(ctx, destination, debtMessage)
 			if err != nil {
 				sb.WriteString(fmt.Sprintf("⚠️ %s - No se pudo enviar (debe iniciar chat con el bot)\n", member.DisplayName))
 			} else {
@@ -417,7 +458,7 @@ func (h *Handler) handlePaymentCalendar(ctx context.Context, chatID, userID int6
 
 	// Sección de pagos próximos (recordatorios)
 	if len(reminders) > 0 {
-		sb.WriteString("🔔 <b>Pagos Programados</b>\n\n")
+		sb.WriteString("🐀 <b>Pagos Programados</b>\n\n")
 
 		// Generar próximos 5 pagos por recordatorio
 		type upcomingPayment struct {
@@ -583,10 +624,10 @@ func (h *Handler) handlePaymentCalendar(ctx context.Context, chatID, userID int6
 // HELPER FUNCTIONS FOR DATE PARSING
 // ============================================
 
-// parseFlexibleDate parsea fechas en múltiples formatos
-func parseFlexibleDate(dateStr string) (time.Time, error) {
+// parseFlexibleDateInLocation parsea fechas en múltiples formatos en la zona indicada.
+func parseFlexibleDateInLocation(dateStr string, location *time.Location) (time.Time, error) {
 	dateStr = strings.ToLower(strings.TrimSpace(dateStr))
-	now := time.Now()
+	now := time.Now().In(location)
 
 	// Casos especiales - días del mes
 	switch dateStr {
@@ -626,7 +667,7 @@ func parseFlexibleDate(dateStr string) (time.Time, error) {
 
 	// Intentar parsear formato DD/MM/YYYY
 	if matched, _ := regexp.MatchString(`^\d{1,2}/\d{1,2}/\d{4}$`, dateStr); matched {
-		t, err := time.Parse("02/01/2006", dateStr)
+		t, err := time.ParseInLocation("02/01/2006", dateStr, location)
 		if err != nil {
 			return time.Time{}, fmt.Errorf("formato de fecha inválido, usa DD/MM/YYYY")
 		}
@@ -635,7 +676,7 @@ func parseFlexibleDate(dateStr string) (time.Time, error) {
 
 	// Intentar parsear formato YYYY-MM-DD
 	if matched, _ := regexp.MatchString(`^\d{4}-\d{1,2}-\d{1,2}$`, dateStr); matched {
-		t, err := time.Parse("2006-01-02", dateStr)
+		t, err := time.ParseInLocation("2006-01-02", dateStr, location)
 		if err != nil {
 			return time.Time{}, fmt.Errorf("formato de fecha inválido, usa YYYY-MM-DD")
 		}
@@ -643,6 +684,31 @@ func parseFlexibleDate(dateStr string) (time.Time, error) {
 	}
 
 	return time.Time{}, fmt.Errorf("formato de fecha no reconocido: %s", dateStr)
+}
+
+// parseFlexibleDate mantiene el parser disponible para los usos existentes.
+func parseFlexibleDate(dateStr string) (time.Time, error) {
+	argentinaLocation, err := time.LoadLocation("America/Argentina/Buenos_Aires")
+	if err != nil {
+		return time.Time{}, fmt.Errorf("cargando zona horaria argentina: %w", err)
+	}
+	return parseFlexibleDateInLocation(dateStr, argentinaLocation)
+}
+
+var reminderTimePattern = regexp.MustCompile(`^\d{2}:\d{2}$`)
+
+// parseReminderTime valida y separa una hora en formato HH:MM.
+func parseReminderTime(value string) (hour, minute int, err error) {
+	value = strings.TrimSpace(value)
+	if !reminderTimePattern.MatchString(value) {
+		return 0, 0, fmt.Errorf("formato de hora inválido")
+	}
+
+	parsed, err := time.Parse("15:04", value)
+	if err != nil {
+		return 0, 0, err
+	}
+	return parsed.Hour(), parsed.Minute(), nil
 }
 
 // findNextWeekday encuentra el próximo día de la semana especificado

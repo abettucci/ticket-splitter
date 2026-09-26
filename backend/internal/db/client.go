@@ -66,6 +66,21 @@ type Member struct {
 	IsActive    bool      `dynamodbav:"is_active"`
 }
 
+// WhatsAppWebContact is a direct-chat opt-in. It is deliberately separate
+// from group membership: joining a group alone must never authorize private
+// reminders.
+type WhatsAppWebContact struct {
+	PK                string    `dynamodbav:"PK"` // USER#<user_id>
+	SK                string    `dynamodbav:"SK"` // CONTACT#WHATSAPP_WEB
+	UserID            int64     `dynamodbav:"user_id"`
+	DisplayName       string    `dynamodbav:"display_name"`
+	DirectChatID      int64     `dynamodbav:"direct_chat_id"`
+	DirectJID         string    `dynamodbav:"direct_jid"`
+	NotificationOptIn bool      `dynamodbav:"notification_opt_in"`
+	CreatedAt         time.Time `dynamodbav:"created_at"`
+	UpdatedAt         time.Time `dynamodbav:"updated_at"`
+}
+
 // Expense representa un gasto
 type Expense struct {
 	PK          string        `dynamodbav:"PK"` // GROUP#<chat_id>
@@ -112,6 +127,7 @@ type ExpenseSplit struct {
 	SK         string    `dynamodbav:"SK"` // SPLIT#<user_id>
 	ID         string    `dynamodbav:"id"`
 	ExpenseID  string    `dynamodbav:"expense_id"`
+	ChatID     int64     `dynamodbav:"chat_id"`
 	UserID     int64     `dynamodbav:"user_id"`
 	UserName   string    `dynamodbav:"user_name"`
 	Amount     float64   `dynamodbav:"amount"`
@@ -349,6 +365,61 @@ func (c *Client) GetGroupMembers(ctx context.Context, chatID int64) ([]Member, e
 	}
 
 	return members, nil
+}
+
+// UpsertWhatsAppWebContact persists the direct-chat opt-in used for private
+// debt reminders. The caller only invokes it after receiving a private inbound
+// WhatsApp Web message from that user.
+func (c *Client) UpsertWhatsAppWebContact(ctx context.Context, userID, directChatID int64, displayName, directJID string) error {
+	now := time.Now()
+	contact := &WhatsAppWebContact{
+		PK:                fmt.Sprintf("USER#%d", userID),
+		SK:                "CONTACT#WHATSAPP_WEB",
+		UserID:            userID,
+		DisplayName:       displayName,
+		DirectChatID:      directChatID,
+		DirectJID:         directJID,
+		NotificationOptIn: true,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+
+	item, err := attributevalue.MarshalMap(contact)
+	if err != nil {
+		return fmt.Errorf("failed to marshal WhatsApp Web contact: %w", err)
+	}
+
+	_, err = c.db.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: aws.String(c.tableName),
+		Item:      item,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to persist WhatsApp Web contact: %w", err)
+	}
+	return nil
+}
+
+// GetWhatsAppWebContact returns the user's explicit direct-chat opt-in.
+func (c *Client) GetWhatsAppWebContact(ctx context.Context, userID int64) (*WhatsAppWebContact, error) {
+	result, err := c.db.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(c.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: fmt.Sprintf("USER#%d", userID)},
+			"SK": &types.AttributeValueMemberS{Value: "CONTACT#WHATSAPP_WEB"},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get WhatsApp Web contact: %w", err)
+	}
+	if result.Item == nil {
+		return nil, nil
+	}
+
+	var contact WhatsAppWebContact
+	if err := attributevalue.UnmarshalMap(result.Item, &contact); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal WhatsApp Web contact: %w", err)
+	}
+	return &contact, nil
 }
 
 // ============================================
@@ -589,6 +660,7 @@ func (c *Client) CreateSplits(ctx context.Context, expense *Expense, members []M
 			SK:        fmt.Sprintf("SPLIT#%d", member.UserID),
 			ID:        uuid.New().String(),
 			ExpenseID: expense.ID,
+			ChatID:    expense.ChatID,
 			UserID:    member.UserID,
 			UserName:  member.DisplayName,
 			Amount:    amountPerPerson,
@@ -650,6 +722,7 @@ func (c *Client) CreateSplitsWithCustomAmounts(ctx context.Context, expense *Exp
 			SK:        fmt.Sprintf("SPLIT#%d", userID),
 			ID:        uuid.New().String(),
 			ExpenseID: expense.ID,
+			ChatID:    expense.ChatID,
 			UserID:    userID,
 			Amount:    amount,
 			IsPaid:    isPaid,
@@ -759,6 +832,34 @@ func (c *Client) GetUserPendingSplits(ctx context.Context, userID int64) ([]Expe
 	}
 
 	return splits, nil
+}
+
+// GetUserPendingSplitsForGroup returns pending splits for one group. It uses
+// the group's expenses as the source of truth so it also supports splits
+// created before chat_id was added to ExpenseSplit.
+func (c *Client) GetUserPendingSplitsForGroup(ctx context.Context, userID, chatID int64) ([]ExpenseSplit, error) {
+	splits, err := c.GetUserPendingSplits(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	expenses, err := c.GetGroupExpenses(ctx, chatID, 1000)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get group expenses: %w", err)
+	}
+
+	groupExpenseIDs := make(map[string]struct{}, len(expenses))
+	for _, expense := range expenses {
+		groupExpenseIDs[expense.ID] = struct{}{}
+	}
+
+	groupSplits := make([]ExpenseSplit, 0, len(splits))
+	for _, split := range splits {
+		if _, belongsToGroup := groupExpenseIDs[split.ExpenseID]; belongsToGroup {
+			groupSplits = append(groupSplits, split)
+		}
+	}
+	return groupSplits, nil
 }
 
 // MarkSplitAsPaid marca una división como pagada

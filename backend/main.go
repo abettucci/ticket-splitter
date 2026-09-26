@@ -49,6 +49,8 @@ var (
 	waBotHandler     *bot.Handler
 	waWebBotHandler  *bot.Handler // nil cuando WHATSAPP_WEB_ENABLED != "true"
 	twilioBotHandler *bot.Handler // nil cuando TWILIO_ACCOUNT_SID no está configurado
+	dbClient         *db.Client
+	waWebClient      *whatsappweb.Client
 	logger           *log.Logger
 )
 
@@ -56,7 +58,8 @@ func init() {
 	logger = log.New(os.Stdout, "[SPLIT-BOT] ", log.LstdFlags|log.Lshortfile)
 
 	// Initialize DynamoDB client
-	dbClient, err := db.NewClient(context.Background())
+	var err error
+	dbClient, err = db.NewClient(context.Background())
 	if err != nil {
 		logger.Fatalf("Failed to initialize DynamoDB client: %v", err)
 	}
@@ -81,7 +84,7 @@ func init() {
 	// be diagnosed from CloudWatch without exposing credentials.
 	logWhatsAppWebConfiguration("initialization")
 	if whatsappWebEnabled() {
-		waWebClient := whatsappweb.NewClient()
+		waWebClient = whatsappweb.NewClient()
 		waWebBotHandler = bot.NewHandler(dbClient, waWebClient, logger, db.ReminderChannelWhatsAppWeb)
 		logger.Printf("WhatsApp Web channel enabled (sidecar=%s)", os.Getenv("WAWEB_SIDECAR_URL"))
 	} else {
@@ -348,17 +351,41 @@ func handleWaWebInbound(ctx context.Context, request events.APIGatewayProxyReque
 	if chatType == "" {
 		chatType = "private"
 	}
+	if chatType != "private" && chatType != "group" {
+		logger.Printf("[%s] WA Web inbound: unsupported chat type %q", requestID, chatType)
+		return errorResponse(http.StatusBadRequest, "invalid chat type")
+	}
+
+	senderID := payload.SenderID
+	if senderID == 0 {
+		senderID = payload.ChatID // Backward-compatible with older sidecar payloads.
+	}
+	if senderID == 0 {
+		logger.Printf("[%s] WA Web inbound: missing sender id", requestID)
+		return errorResponse(http.StatusBadRequest, "missing sender id")
+	}
+
+	waWebClient.RememberChatType(payload.ChatID, chatType)
+	if chatType == "private" {
+		if err := dbClient.UpsertWhatsAppWebContact(ctx, senderID, payload.ChatID, payload.FromName, payload.SenderJID); err != nil {
+			logger.Printf("[%s] WA Web inbound: could not persist direct-chat opt-in for user %d: %v", requestID, senderID, err)
+			return errorResponse(http.StatusInternalServerError, "could not save contact")
+		}
+	}
 
 	update := &telegram.Update{
 		Message: &telegram.Message{
-			Text: text,
+			Text:          text,
+			InteractiveID: payload.InteractiveID,
+			IsMentioned:   payload.IsMentioned,
 			From: &telegram.User{
-				ID:        payload.ChatID,
+				ID:        senderID,
 				FirstName: payload.FromName,
 			},
 			Chat: &telegram.Chat{
-				ID:   payload.ChatID,
-				Type: chatType,
+				ID:    payload.ChatID,
+				Type:  chatType,
+				Title: payload.ChatName,
 			},
 		},
 	}

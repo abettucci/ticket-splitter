@@ -1,11 +1,16 @@
 import { Card, CardContent } from "@/components/ui/card";
-import { Send, Calculator, Receipt, Users, Clock, Shield, Lock, Zap } from "lucide-react";
+import { Send, Calculator, Receipt, Users, Clock, Shield, Lock, MessageCircle } from "lucide-react";
 
 const features = [
   {
     icon: Send,
-    title: "Integración nativa con Telegram",
-    description: "Funciona directamente en Telegram sin necesidad de apps adicionales o registros complicados."
+    title: "Telegram y WhatsApp",
+    description: "Usalo desde el chat que ya tenés abierto: Telegram o WhatsApp Web, sin instalar otra app."
+  },
+  {
+    icon: MessageCircle,
+    title: "Grupos de WhatsApp",
+    description: "Agregá el bot al grupo, hacé que cada integrante envíe /start y dividí gastos ahí mismo."
   },
   {
     icon: Calculator,
@@ -13,9 +18,9 @@ const features = [
     description: "Divide gastos automáticamente entre los participantes del grupo de forma equitativa."
   },
   {
-    icon: Zap,
-    title: "Respuesta instantánea",
-    description: "Backend en Go ultra-rápido. Respuestas en milisegundos gracias a AWS Lambda."
+    icon: Clock,
+    title: "Recordatorios privados",
+    description: "Desde el grupo, avisá por privado a quienes deben pagar. Cada persona habilita el contacto con /start."
   },
   {
     icon: Users,
@@ -40,13 +45,13 @@ const features = [
   {
     icon: Receipt,
     title: "100% gratuito",
-    description: "Sin costos ocultos, sin planes premium. Telegram + AWS Free Tier = $0/mes."
+    description: "Sin costos ocultos ni planes premium para empezar a organizar los gastos de tu grupo."
   }
 ];
 
 export const Features = () => {
   return (
-    <section className="py-20 bg-slate-50">
+    <section id="features" className="py-20 bg-slate-50">
       <div className="container mx-auto px-4">
         <div className="text-center mb-16">
           <h2 className="text-4xl lg:text-5xl font-bold text-slate-900 mb-6">
@@ -58,7 +63,7 @@ export const Features = () => {
           </p>
         </div>
         
-        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
           {features.map((feature, index) => (
             <Card key={index} className="bg-white shadow-lg border-0 p-6 hover:shadow-xl hover:-translate-y-1 transition-all duration-300 group">
               <CardContent className="p-0">

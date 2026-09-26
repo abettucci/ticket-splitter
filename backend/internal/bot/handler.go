@@ -78,6 +78,12 @@ func (h *Handler) HandleUpdate(ctx context.Context, update *telegram.Update) err
 		h.logger.Printf("Error adding member: %v", err)
 	}
 
+	// WhatsApp lists/buttons carry an opaque action ID. Process it before the
+	// text parser so only an actual interactive response can invoke callbacks.
+	if msg.InteractiveID != "" {
+		return h.handleInteractiveSelection(ctx, chatID, userID, displayName, msg.InteractiveID)
+	}
+
 	// Procesar comandos
 	text := strings.TrimSpace(msg.Text)
 	if !strings.HasPrefix(text, "/") {
@@ -86,9 +92,14 @@ func (h *Handler) HandleUpdate(ctx context.Context, update *telegram.Update) err
 		if state != nil {
 			return h.handleConversationStep(ctx, chatID, userID, displayName, text, state)
 		}
-		// En chats privados, intentar lenguaje natural
+		// In private chats, natural language is always safe. In groups, only
+		// respond when the person explicitly mentioned Splitter; active flows
+		// can continue without repeating the mention.
 		if msg.Chat.Type == "private" {
-			return h.handleNaturalLanguage(ctx, chatID, userID, displayName, text)
+			return h.handleNaturalLanguage(ctx, chatID, userID, displayName, text, false)
+		}
+		if msg.Chat.Type == "group" && msg.IsMentioned {
+			return h.handleNaturalLanguage(ctx, chatID, userID, displayName, text, true)
 		}
 		return nil
 	}
@@ -185,6 +196,28 @@ func (h *Handler) HandleUpdate(ctx context.Context, update *telegram.Update) err
 	}
 }
 
+// handleInteractiveSelection routes WhatsApp list/button selections. Telegram
+// uses CallbackQuery instead, so this never changes its existing behavior.
+func (h *Handler) handleInteractiveSelection(ctx context.Context, chatID, userID int64, userName, selection string) error {
+	parts := strings.SplitN(selection, ":", 2)
+	if len(parts) != 2 {
+		return h.tg.SendMessage(ctx, chatID, "❌ Esa opción ya no es válida. Pedile el menú a Splitter de nuevo.")
+	}
+
+	switch parts[0] {
+	case "menu":
+		return h.handleMenuCallback(ctx, chatID, userID, userName, parts[1], "")
+	case "divide":
+		return h.handleDivide(ctx, chatID, userID, []string{parts[1]})
+	case "redivide":
+		return h.handleRedivide(ctx, chatID, userID, []string{parts[1]})
+	case "conv_payer":
+		return h.handlePayerCallback(ctx, chatID, userID, userName, parts[1], "")
+	default:
+		return h.tg.SendMessage(ctx, chatID, "❌ Esa opción no está disponible. Pedile el menú a Splitter de nuevo.")
+	}
+}
+
 // handleCallbackQuery procesa callback queries de inline keyboards
 func (h *Handler) handleCallbackQuery(ctx context.Context, query *telegram.CallbackQuery) error {
 	// Validar estructura
@@ -235,6 +268,9 @@ func (h *Handler) handleCallbackQuery(ctx context.Context, query *telegram.Callb
 	case "divide":
 		_ = h.tg.AnswerCallbackQuery(ctx, query.ID, "Dividiendo...")
 		return h.handleDivide(ctx, chatID, userID, []string{shortID})
+	case "redivide":
+		_ = h.tg.AnswerCallbackQuery(ctx, query.ID, "Redividiendo...")
+		return h.handleRedivide(ctx, chatID, userID, []string{shortID})
 	case "conv_payer":
 		return h.handlePayerCallback(ctx, chatID, userID, displayName, shortID, query.ID)
 	default:
@@ -356,14 +392,16 @@ func (h *Handler) handleHelp(ctx context.Context, chatID int64) error {
 • /miembros - Ver miembros
 • /categorias - Ver categorías
 
-🔔 <b>Recordatorios y Calendario</b>
-• /recordar_pago [desc] [monto] [deudor] [acreedor] [cuotas] [frec] [fecha]
+🐀 <b>Recordatorios y Calendario</b>
+• /recordar_pago [desc] [monto] [deudor] [acreedor] [cuotas] [frec] [fecha] [hora]
   <i>Yo pago: /recordar_pago Netflix 1500 yo Juan 1 monthly</i>
   <i>Me pagan: /recordar_pago Cuota ACDC 5000 Ana yo 6 monthly</i>
+  <i>Con hora: /recordar_pago Regalo 30000 yo Nico 1 once 30/09/2026 18:30</i>
 • /calendario_pagos - Ver tu calendario de pagos futuros
 • /mis_recordatorios - Ver tus recordatorios activos
 • /cancelar_recordatorio [id] - Cancelar recordatorio
 • /recordar_deudas - Recordar a deudores del grupo
+  <i>En WhatsApp, cada deudor debe haber enviado /start por chat privado.</i>
 
 🧪 <b>Testing</b>
 • /crear_usuarios_prueba [nombre1] [nombre2]... - Crear usuarios personalizados

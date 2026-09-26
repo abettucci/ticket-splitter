@@ -44,6 +44,11 @@ type Message struct {
 	Chat      *Chat  `json:"chat"`
 	Date      int64  `json:"date"`
 	Text      string `json:"text,omitempty"`
+	// InteractiveID is populated by WhatsApp interactive lists/buttons. It is
+	// intentionally separate from Text so a user cannot accidentally trigger
+	// a callback by typing its internal identifier.
+	InteractiveID string `json:"-"`
+	IsMentioned   bool   `json:"-"`
 }
 
 // User representa un usuario de Telegram

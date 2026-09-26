@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/abettucci/group-split-bot/internal/telegram"
@@ -20,6 +21,7 @@ type Client struct {
 	httpClient   *http.Client
 	sidecarURL   string
 	sharedSecret string
+	chatTypes    sync.Map // map[int64]string; response route learned from inbound WhatsApp messages
 }
 
 // NewClient crea un cliente que postea outbound al sidecar.
@@ -33,19 +35,73 @@ func NewClient() *Client {
 }
 
 type sendRequest struct {
-	ChatID   int64  `json:"chat_id"`
-	ChatType string `json:"chat_type"`
-	Text     string `json:"text"`
+	ChatID      int64                   `json:"chat_id"`
+	ChatType    string                  `json:"chat_type"`
+	Text        string                  `json:"text"`
+	Interactive *interactiveListRequest `json:"interactive,omitempty"`
 }
 
-// SendMessage envía un mensaje individual (privado). Para grupos usar SendMessageWithChatType.
+type interactiveListRow struct {
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Description string `json:"description,omitempty"`
+}
+
+type interactiveListRequest struct {
+	Type       string               `json:"type"`
+	Title      string               `json:"title,omitempty"`
+	ButtonText string               `json:"button_text"`
+	Footer     string               `json:"footer,omitempty"`
+	Rows       []interactiveListRow `json:"rows"`
+}
+
+// RememberChatType stores the route for a chat that has just sent an inbound message.
+// Group replies must go to @g.us, while debt reminders always use a private route.
+func (c *Client) RememberChatType(chatID int64, chatType string) {
+	if chatType == "group" || chatType == "private" {
+		c.chatTypes.Store(chatID, chatType)
+	}
+}
+
+// SendMessage replies to the inbound chat type when known, otherwise defaults to private.
 func (c *Client) SendMessage(ctx context.Context, chatID int64, text string) error {
-	return c.sendInternal(ctx, chatID, "private", text)
+	chatType := "private"
+	if value, ok := c.chatTypes.Load(chatID); ok {
+		chatType, _ = value.(string)
+	}
+	return c.sendInternal(ctx, chatID, chatType, text)
 }
 
-// SendMessageWithOptions ignora ReplyMarkup (WhatsApp Web no tiene inline keyboards).
+// SendMessageWithOptions turns Telegram inline keyboards into a WhatsApp list
+// when possible, while preserving a numbered-text fallback for every client.
 func (c *Client) SendMessageWithOptions(ctx context.Context, req *telegram.SendMessageRequest) error {
-	return c.SendMessage(ctx, req.ChatID, req.Text)
+	keyboard, ok := req.ReplyMarkup.(telegram.InlineKeyboardMarkup)
+	if !ok {
+		return c.SendMessage(ctx, req.ChatID, req.Text)
+	}
+
+	rows := make([]interactiveListRow, 0, 10)
+	for _, row := range keyboard.InlineKeyboard {
+		for _, button := range row {
+			if button.CallbackData == "" || len(rows) == 10 {
+				continue
+			}
+			rows = append(rows, interactiveListRow{ID: button.CallbackData, Title: button.Text})
+		}
+	}
+	if len(rows) == 0 {
+		return c.SendMessage(ctx, req.ChatID, req.Text)
+	}
+
+	fallback := formatInteractiveFallback(req.Text, rows)
+	interactive := &interactiveListRequest{
+		Type:       "list",
+		Title:      "Splitter",
+		ButtonText: "Ver opciones",
+		Footer:     "También podés responder con el número o escribir lo que necesitás.",
+		Rows:       rows,
+	}
+	return c.sendInternalWithInteractive(ctx, req.ChatID, c.chatTypeFor(req.ChatID), fallback, interactive)
 }
 
 // EditMessageText: WhatsApp no permite editar mensajes a través de la API web pública.
@@ -60,6 +116,18 @@ func (c *Client) AnswerCallbackQuery(_ context.Context, _ string, _ string) erro
 }
 
 func (c *Client) sendInternal(ctx context.Context, chatID int64, chatType, text string) error {
+	return c.sendInternalWithInteractive(ctx, chatID, chatType, text, nil)
+}
+
+func (c *Client) chatTypeFor(chatID int64) string {
+	chatType := "private"
+	if value, ok := c.chatTypes.Load(chatID); ok {
+		chatType, _ = value.(string)
+	}
+	return chatType
+}
+
+func (c *Client) sendInternalWithInteractive(ctx context.Context, chatID int64, chatType, text string, interactive *interactiveListRequest) error {
 	if c.sidecarURL == "" {
 		return fmt.Errorf("waweb: WAWEB_SIDECAR_URL not configured")
 	}
@@ -67,7 +135,7 @@ func (c *Client) sendInternal(ctx context.Context, chatID int64, chatType, text 
 		return fmt.Errorf("waweb: WAWEB_SHARED_SECRET not configured")
 	}
 
-	body, err := json.Marshal(sendRequest{ChatID: chatID, ChatType: chatType, Text: text})
+	body, err := json.Marshal(sendRequest{ChatID: chatID, ChatType: chatType, Text: text, Interactive: interactive})
 	if err != nil {
 		return fmt.Errorf("waweb: marshal: %w", err)
 	}
@@ -92,13 +160,28 @@ func (c *Client) sendInternal(ctx context.Context, chatID int64, chatType, text 
 	return nil
 }
 
+func formatInteractiveFallback(text string, rows []interactiveListRow) string {
+	var builder strings.Builder
+	builder.WriteString(text)
+	builder.WriteString("\n\nRespondé con:\n")
+	for index, row := range rows {
+		fmt.Fprintf(&builder, "%d. %s\n", index+1, row.Title)
+	}
+	return strings.TrimSpace(builder.String())
+}
+
 // InboundPayload representa el body que envía el sidecar a /wa-web/inbound.
 type InboundPayload struct {
-	ChatID    int64  `json:"chat_id"`
-	RawJID    string `json:"raw_jid"`
-	ChatType  string `json:"chat_type"` // "private" | "group"
-	FromName  string `json:"from_name"`
-	Text      string `json:"text"`
-	MessageID string `json:"message_id"`
-	Timestamp int64  `json:"timestamp"`
+	ChatID        int64  `json:"chat_id"`
+	RawJID        string `json:"raw_jid"`
+	ChatType      string `json:"chat_type"` // "private" | "group"
+	ChatName      string `json:"chat_name"`
+	SenderID      int64  `json:"sender_id"`
+	SenderJID     string `json:"sender_jid"`
+	InteractiveID string `json:"interactive_id"`
+	IsMentioned   bool   `json:"is_mentioned"`
+	FromName      string `json:"from_name"`
+	Text          string `json:"text"`
+	MessageID     string `json:"message_id"`
+	Timestamp     int64  `json:"timestamp"`
 }
