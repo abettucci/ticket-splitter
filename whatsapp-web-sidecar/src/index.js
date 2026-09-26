@@ -96,17 +96,15 @@ client.on('message', async (msg) => {
     const isGroup = msg.from.endsWith('@g.us');
     if (isGroup && !ALLOW_GROUPS) return;
 
-    const rawId = jidToRawID(msg.from);
-    const chatId = Number(rawId);
-    if (!Number.isSafeInteger(chatId)) {
+    const chatId = jidToRawID(msg.from);
+    if (!isNumericWhatsAppID(chatId)) {
       console.warn('Cannot parse chat id from', msg.from);
       return;
     }
 
     const senderJid = isGroup ? msg.author : msg.from;
-    const senderRawID = jidToRawID(senderJid);
-    const senderId = Number(senderRawID);
-    if (!Number.isSafeInteger(senderId)) {
+    const senderId = jidToRawID(senderJid);
+    if (!isNumericWhatsAppID(senderId)) {
       console.warn('Cannot parse sender id from', senderJid);
       return;
     }
@@ -116,10 +114,10 @@ client.on('message', async (msg) => {
       rememberInboundChat(senderId, 'private', senderJid);
     }
 
-    let displayName = senderRawID;
+    let displayName = senderId;
     try {
       const contact = await msg.getContact();
-      displayName = contact.pushname || contact.name || contact.number || senderRawID;
+      displayName = contact.pushname || contact.name || contact.number || senderId;
     } catch (e) {
       console.warn('Could not fetch contact for', msg.from, e.message);
     }
@@ -323,6 +321,10 @@ function chatKey(chatId, chatType) {
 
 function jidToRawID(jid) {
   return String(jid || '').replace(/@(c\.us|g\.us|lid)$/, '');
+}
+
+function isNumericWhatsAppID(value) {
+  return /^\d+$/.test(String(value || ''));
 }
 
 function rememberInboundChat(chatId, chatType, jid) {

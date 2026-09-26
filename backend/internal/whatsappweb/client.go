@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -35,7 +36,9 @@ func NewClient() *Client {
 }
 
 type sendRequest struct {
-	ChatID      int64                   `json:"chat_id"`
+	// Keep chat IDs as JSON strings: group JIDs can exceed JavaScript's safe
+	// integer range, and the Node sidecar must preserve every digit.
+	ChatID      string                  `json:"chat_id"`
 	ChatType    string                  `json:"chat_type"`
 	Text        string                  `json:"text"`
 	Interactive *interactiveListRequest `json:"interactive,omitempty"`
@@ -135,7 +138,7 @@ func (c *Client) sendInternalWithInteractive(ctx context.Context, chatID int64, 
 		return fmt.Errorf("waweb: WAWEB_SHARED_SECRET not configured")
 	}
 
-	body, err := json.Marshal(sendRequest{ChatID: chatID, ChatType: chatType, Text: text, Interactive: interactive})
+	body, err := json.Marshal(sendRequest{ChatID: strconv.FormatInt(chatID, 10), ChatType: chatType, Text: text, Interactive: interactive})
 	if err != nil {
 		return fmt.Errorf("waweb: marshal: %w", err)
 	}
@@ -172,16 +175,35 @@ func formatInteractiveFallback(text string, rows []interactiveListRow) string {
 
 // InboundPayload representa el body que envía el sidecar a /wa-web/inbound.
 type InboundPayload struct {
-	ChatID        int64  `json:"chat_id"`
-	RawJID        string `json:"raw_jid"`
-	ChatType      string `json:"chat_type"` // "private" | "group"
-	ChatName      string `json:"chat_name"`
-	SenderID      int64  `json:"sender_id"`
-	SenderJID     string `json:"sender_jid"`
-	InteractiveID string `json:"interactive_id"`
-	IsMentioned   bool   `json:"is_mentioned"`
-	FromName      string `json:"from_name"`
-	Text          string `json:"text"`
-	MessageID     string `json:"message_id"`
-	Timestamp     int64  `json:"timestamp"`
+	ChatID        NumericID `json:"chat_id"`
+	RawJID        string    `json:"raw_jid"`
+	ChatType      string    `json:"chat_type"` // "private" | "group"
+	ChatName      string    `json:"chat_name"`
+	SenderID      NumericID `json:"sender_id"`
+	SenderJID     string    `json:"sender_jid"`
+	InteractiveID string    `json:"interactive_id"`
+	IsMentioned   bool      `json:"is_mentioned"`
+	FromName      string    `json:"from_name"`
+	Text          string    `json:"text"`
+	MessageID     string    `json:"message_id"`
+	Timestamp     int64     `json:"timestamp"`
+}
+
+// NumericID accepts both the older numeric payload and the string payload
+// used now. Strings are mandatory for large WhatsApp group IDs because JSON
+// numbers are parsed as JavaScript Number values in the sidecar.
+type NumericID string
+
+func (id *NumericID) UnmarshalJSON(data []byte) error {
+	raw := strings.TrimSpace(string(data))
+	if len(raw) > 1 && raw[0] == '"' {
+		var decoded string
+		if err := json.Unmarshal(data, &decoded); err != nil {
+			return err
+		}
+		*id = NumericID(decoded)
+		return nil
+	}
+	*id = NumericID(raw)
+	return nil
 }

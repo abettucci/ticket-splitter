@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -341,9 +342,15 @@ func handleWaWebInbound(ctx context.Context, request events.APIGatewayProxyReque
 		text = text[:security.MaxMessageLength]
 	}
 
+	chatID, err := parseWAWebNumericID(payload.ChatID)
+	if err != nil {
+		logger.Printf("[%s] WA Web inbound: invalid chat id %q", requestID, payload.ChatID)
+		return errorResponse(http.StatusBadRequest, "invalid chat id")
+	}
+
 	// Rate limit por chat_id (defensa en profundidad)
-	if !security.CheckRateLimit(payload.ChatID) {
-		logger.Printf("[%s] WA Web inbound: rate limited chat=%d", requestID, payload.ChatID)
+	if !security.CheckRateLimit(chatID) {
+		logger.Printf("[%s] WA Web inbound: rate limited chat=%d", requestID, chatID)
 		return successResponse() // No filtrar info al cliente
 	}
 
@@ -356,18 +363,19 @@ func handleWaWebInbound(ctx context.Context, request events.APIGatewayProxyReque
 		return errorResponse(http.StatusBadRequest, "invalid chat type")
 	}
 
-	senderID := payload.SenderID
-	if senderID == 0 {
-		senderID = payload.ChatID // Backward-compatible with older sidecar payloads.
+	senderRawID := payload.SenderID
+	if senderRawID == "" {
+		senderRawID = payload.ChatID // Backward-compatible with older sidecar payloads.
 	}
-	if senderID == 0 {
-		logger.Printf("[%s] WA Web inbound: missing sender id", requestID)
-		return errorResponse(http.StatusBadRequest, "missing sender id")
+	senderID, err := parseWAWebNumericID(senderRawID)
+	if err != nil {
+		logger.Printf("[%s] WA Web inbound: invalid sender id %q", requestID, senderRawID)
+		return errorResponse(http.StatusBadRequest, "invalid sender id")
 	}
 
-	waWebClient.RememberChatType(payload.ChatID, chatType)
+	waWebClient.RememberChatType(chatID, chatType)
 	if chatType == "private" {
-		if err := dbClient.UpsertWhatsAppWebContact(ctx, senderID, payload.ChatID, payload.FromName, payload.SenderJID); err != nil {
+		if err := dbClient.UpsertWhatsAppWebContact(ctx, senderID, chatID, payload.FromName, payload.SenderJID); err != nil {
 			logger.Printf("[%s] WA Web inbound: could not persist direct-chat opt-in for user %d: %v", requestID, senderID, err)
 			return errorResponse(http.StatusInternalServerError, "could not save contact")
 		}
@@ -383,7 +391,7 @@ func handleWaWebInbound(ctx context.Context, request events.APIGatewayProxyReque
 				FirstName: payload.FromName,
 			},
 			Chat: &telegram.Chat{
-				ID:    payload.ChatID,
+				ID:    chatID,
 				Type:  chatType,
 				Title: payload.ChatName,
 			},
@@ -396,6 +404,14 @@ func handleWaWebInbound(ctx context.Context, request events.APIGatewayProxyReque
 
 	logger.Printf("[%s] WA Web inbound processed in %v", requestID, time.Since(startTime))
 	return successResponse()
+}
+
+func parseWAWebNumericID(raw whatsappweb.NumericID) (int64, error) {
+	id := strings.TrimSpace(string(raw))
+	if id == "" {
+		return 0, fmt.Errorf("missing")
+	}
+	return strconv.ParseInt(id, 10, 64)
 }
 
 func whatsappWebEnabled() bool {
