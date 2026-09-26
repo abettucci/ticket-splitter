@@ -5,7 +5,7 @@ import path from 'node:path';
 import QRCode from 'qrcode';
 import pkg from 'whatsapp-web.js';
 
-const { Client, List, LocalAuth } = pkg;
+const { Client, LocalAuth } = pkg;
 
 const PORT = Number(process.env.PORT || 3000);
 const SHARED_SECRET = process.env.SHARED_SECRET;
@@ -224,7 +224,7 @@ app.post('/send', async (req, res) => {
     return res.status(503).json({ ok: false, error: 'client not ready' });
   }
 
-  const { chat_id, chat_type, text, interactive } = req.body || {};
+  const { chat_id, chat_type, text } = req.body || {};
   if (!chat_id || !text) {
     return res.status(400).json({ ok: false, error: 'missing chat_id or text' });
   }
@@ -235,26 +235,8 @@ app.post('/send', async (req, res) => {
 
   try {
     const sanitized = stripHtmlForWhatsApp(String(text));
-    if (isListRequest(interactive)) {
-      try {
-        const list = new List(
-          sanitized,
-          String(interactive.button_text || 'Ver opciones'),
-          [{ title: String(interactive.title || 'Splitter'), rows: interactive.rows }],
-          String(interactive.title || 'Splitter'),
-          String(interactive.footer || ''),
-        );
-        await client.sendMessage(jid, list);
-        return res.json({ ok: true, interactive: 'list' });
-      } catch (interactiveError) {
-        // Interactive messages are not equally supported by every WhatsApp Web
-        // build. The numbered text sent by Go remains a fully functional
-        // fallback, so do not fail a user action merely because the list did.
-        console.warn('Interactive list failed; sending text fallback:', interactiveError.message);
-      }
-    }
     await client.sendMessage(jid, sanitized);
-    res.json({ ok: true, interactive: 'text' });
+    res.json({ ok: true });
   } catch (e) {
     console.error('Send failed:', e);
     res.status(500).json({ ok: false, error: e.message });
@@ -270,15 +252,6 @@ function stripHtmlForWhatsApp(text) {
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>');
-}
-
-function isListRequest(interactive) {
-  return interactive
-    && interactive.type === 'list'
-    && Array.isArray(interactive.rows)
-    && interactive.rows.length > 0
-    && interactive.rows.length <= 10
-    && interactive.rows.every((row) => row && typeof row.id === 'string' && typeof row.title === 'string');
 }
 
 function getInteractiveID(msg) {

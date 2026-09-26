@@ -38,24 +38,9 @@ func NewClient() *Client {
 type sendRequest struct {
 	// Keep chat IDs as JSON strings: group JIDs can exceed JavaScript's safe
 	// integer range, and the Node sidecar must preserve every digit.
-	ChatID      string                  `json:"chat_id"`
-	ChatType    string                  `json:"chat_type"`
-	Text        string                  `json:"text"`
-	Interactive *interactiveListRequest `json:"interactive,omitempty"`
-}
-
-type interactiveListRow struct {
-	ID          string `json:"id"`
-	Title       string `json:"title"`
-	Description string `json:"description,omitempty"`
-}
-
-type interactiveListRequest struct {
-	Type       string               `json:"type"`
-	Title      string               `json:"title,omitempty"`
-	ButtonText string               `json:"button_text"`
-	Footer     string               `json:"footer,omitempty"`
-	Rows       []interactiveListRow `json:"rows"`
+	ChatID   string `json:"chat_id"`
+	ChatType string `json:"chat_type"`
+	Text     string `json:"text"`
 }
 
 // RememberChatType stores the route for a chat that has just sent an inbound message.
@@ -75,36 +60,29 @@ func (c *Client) SendMessage(ctx context.Context, chatID int64, text string) err
 	return c.sendInternal(ctx, chatID, chatType, text)
 }
 
-// SendMessageWithOptions turns Telegram inline keyboards into a WhatsApp list
-// when possible, while preserving a numbered-text fallback for every client.
+// SendMessageWithOptions renders Telegram keyboards as a numbered text menu.
+// WhatsApp Web removed support for sending buttons and lists from unofficial
+// clients, so a text menu is the reliable cross-client interaction model.
 func (c *Client) SendMessageWithOptions(ctx context.Context, req *telegram.SendMessageRequest) error {
 	keyboard, ok := req.ReplyMarkup.(telegram.InlineKeyboardMarkup)
 	if !ok {
 		return c.SendMessage(ctx, req.ChatID, req.Text)
 	}
 
-	rows := make([]interactiveListRow, 0, 10)
+	rows := make([]string, 0, 10)
 	for _, row := range keyboard.InlineKeyboard {
 		for _, button := range row {
 			if button.CallbackData == "" || len(rows) == 10 {
 				continue
 			}
-			rows = append(rows, interactiveListRow{ID: button.CallbackData, Title: button.Text})
+			rows = append(rows, button.Text)
 		}
 	}
 	if len(rows) == 0 {
 		return c.SendMessage(ctx, req.ChatID, req.Text)
 	}
 
-	fallback := formatInteractiveFallback(req.Text, rows)
-	interactive := &interactiveListRequest{
-		Type:       "list",
-		Title:      "Splitter",
-		ButtonText: "Ver opciones",
-		Footer:     "También podés responder con el número o escribir lo que necesitás.",
-		Rows:       rows,
-	}
-	return c.sendInternalWithInteractive(ctx, req.ChatID, c.chatTypeFor(req.ChatID), fallback, interactive)
+	return c.sendInternal(ctx, req.ChatID, c.chatTypeFor(req.ChatID), formatNumberedOptions(req.Text, rows))
 }
 
 // EditMessageText: WhatsApp no permite editar mensajes a través de la API web pública.
@@ -119,18 +97,6 @@ func (c *Client) AnswerCallbackQuery(_ context.Context, _ string, _ string) erro
 }
 
 func (c *Client) sendInternal(ctx context.Context, chatID int64, chatType, text string) error {
-	return c.sendInternalWithInteractive(ctx, chatID, chatType, text, nil)
-}
-
-func (c *Client) chatTypeFor(chatID int64) string {
-	chatType := "private"
-	if value, ok := c.chatTypes.Load(chatID); ok {
-		chatType, _ = value.(string)
-	}
-	return chatType
-}
-
-func (c *Client) sendInternalWithInteractive(ctx context.Context, chatID int64, chatType, text string, interactive *interactiveListRequest) error {
 	if c.sidecarURL == "" {
 		return fmt.Errorf("waweb: WAWEB_SIDECAR_URL not configured")
 	}
@@ -138,7 +104,7 @@ func (c *Client) sendInternalWithInteractive(ctx context.Context, chatID int64, 
 		return fmt.Errorf("waweb: WAWEB_SHARED_SECRET not configured")
 	}
 
-	body, err := json.Marshal(sendRequest{ChatID: strconv.FormatInt(chatID, 10), ChatType: chatType, Text: text, Interactive: interactive})
+	body, err := json.Marshal(sendRequest{ChatID: strconv.FormatInt(chatID, 10), ChatType: chatType, Text: text})
 	if err != nil {
 		return fmt.Errorf("waweb: marshal: %w", err)
 	}
@@ -163,12 +129,20 @@ func (c *Client) sendInternalWithInteractive(ctx context.Context, chatID int64, 
 	return nil
 }
 
-func formatInteractiveFallback(text string, rows []interactiveListRow) string {
+func (c *Client) chatTypeFor(chatID int64) string {
+	chatType := "private"
+	if value, ok := c.chatTypes.Load(chatID); ok {
+		chatType, _ = value.(string)
+	}
+	return chatType
+}
+
+func formatNumberedOptions(text string, rows []string) string {
 	var builder strings.Builder
 	builder.WriteString(text)
 	builder.WriteString("\n\nRespondé con:\n")
 	for index, row := range rows {
-		fmt.Fprintf(&builder, "%d. %s\n", index+1, row.Title)
+		fmt.Fprintf(&builder, "%d. %s\n", index+1, row)
 	}
 	return strings.TrimSpace(builder.String())
 }
