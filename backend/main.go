@@ -76,11 +76,16 @@ func init() {
 		logger.Printf("Twilio WhatsApp channel enabled (from=%s)", os.Getenv("TWILIO_WHATSAPP_FROM"))
 	}
 
-	// Initialize WhatsApp Web client (optional, opt-in via env)
-	if os.Getenv("WHATSAPP_WEB_ENABLED") == "true" {
+	// Initialize WhatsApp Web client (optional, opt-in via env).
+	// Log only configuration presence—not values of secrets—so a deployment can
+	// be diagnosed from CloudWatch without exposing credentials.
+	logWhatsAppWebConfiguration("initialization")
+	if whatsappWebEnabled() {
 		waWebClient := whatsappweb.NewClient()
 		waWebBotHandler = bot.NewHandler(dbClient, waWebClient, logger, db.ReminderChannelWhatsAppWeb)
 		logger.Printf("WhatsApp Web channel enabled (sidecar=%s)", os.Getenv("WAWEB_SIDECAR_URL"))
+	} else {
+		logger.Printf("WhatsApp Web channel disabled; set WHATSAPP_WEB_ENABLED=true in the deployed Lambda environment")
 	}
 }
 
@@ -287,6 +292,7 @@ func handleWaWebInbound(ctx context.Context, request events.APIGatewayProxyReque
 	requestID := request.RequestContext.RequestID
 
 	if waWebBotHandler == nil {
+		logWhatsAppWebConfiguration("inbound rejected")
 		logger.Printf("[%s] WA Web inbound received but channel disabled", requestID)
 		return errorResponse(http.StatusServiceUnavailable, "channel disabled")
 	}
@@ -363,6 +369,23 @@ func handleWaWebInbound(ctx context.Context, request events.APIGatewayProxyReque
 
 	logger.Printf("[%s] WA Web inbound processed in %v", requestID, time.Since(startTime))
 	return successResponse()
+}
+
+func whatsappWebEnabled() bool {
+	enabled, err := strconv.ParseBool(strings.TrimSpace(os.Getenv("WHATSAPP_WEB_ENABLED")))
+	return err == nil && enabled
+}
+
+func logWhatsAppWebConfiguration(stage string) {
+	rawFlag := os.Getenv("WHATSAPP_WEB_ENABLED")
+	logger.Printf(
+		"WhatsApp Web configuration (%s): flag_raw=%q enabled=%t sidecar_url_configured=%t shared_secret_configured=%t",
+		stage,
+		rawFlag,
+		whatsappWebEnabled(),
+		strings.TrimSpace(os.Getenv("WAWEB_SIDECAR_URL")) != "",
+		strings.TrimSpace(os.Getenv("WAWEB_SHARED_SECRET")) != "",
+	)
 }
 
 // handleTwilioInbound procesa mensajes entrantes desde Twilio WhatsApp.

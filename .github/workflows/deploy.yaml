@@ -14,7 +14,9 @@ env:
   TF_VAR_twilio_whatsapp_from: ${{ secrets.TWILIO_WHATSAPP_FROM }}
   TF_VAR_twilio_webhook_url: ${{ secrets.TWILIO_WEBHOOK_URL }}
   TF_VAR_twilio_skip_signature: ${{ secrets.TWILIO_SKIP_SIGNATURE }}
-  TF_VAR_whatsapp_web_reminders_enabled: ${{ vars.WHATSAPP_WEB_REMINDERS_ENABLED || 'false' }}
+  # Prefer the repository Variable. The Secret fallback prevents a silent
+  # disable when an operator stored this non-sensitive feature flag as a Secret.
+  TF_VAR_whatsapp_web_reminders_enabled: ${{ vars.WHATSAPP_WEB_REMINDERS_ENABLED || secrets.WHATSAPP_WEB_REMINDERS_ENABLED || 'false' }}
   TF_VAR_waweb_sidecar_url: ${{ secrets.WAWEB_SIDECAR_URL }}
   TF_VAR_waweb_shared_secret: ${{ secrets.WAWEB_SHARED_SECRET }}
   TF_VAR_environment: "prod"
@@ -105,6 +107,26 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Diagnose WhatsApp Web deploy configuration
+        run: |
+          if [ "$TF_VAR_whatsapp_web_reminders_enabled" = "true" ]; then
+            echo "✅ WhatsApp Web feature flag is enabled for this Terraform run"
+          else
+            echo "::warning::WhatsApp Web feature flag is disabled for this Terraform run"
+          fi
+
+          if [ -n "$TF_VAR_waweb_sidecar_url" ]; then
+            echo "✅ WhatsApp Web sidecar URL is configured"
+          else
+            echo "::warning::WhatsApp Web sidecar URL is missing"
+          fi
+
+          if [ -n "$TF_VAR_waweb_shared_secret" ]; then
+            echo "✅ WhatsApp Web shared secret is configured"
+          else
+            echo "::warning::WhatsApp Web shared secret is missing"
+          fi
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
@@ -213,6 +235,48 @@ jobs:
       - name: Terraform Apply
         working-directory: ./infrastructure
         run: terraform apply -auto-approve tfplan
+
+      - name: Verify deployed WhatsApp Web configuration
+        run: |
+          LAMBDA_ENV=$(aws lambda get-function-configuration \
+            --function-name splitbot-prod \
+            --query 'Environment.Variables' \
+            --output json)
+
+          echo "$LAMBDA_ENV" | jq '{
+            WHATSAPP_WEB_ENABLED: .WHATSAPP_WEB_ENABLED,
+            WAWEB_SIDECAR_URL_configured: ((.WAWEB_SIDECAR_URL // "") | length > 0),
+            WAWEB_SHARED_SECRET_configured: ((.WAWEB_SHARED_SECRET // "") | length > 0)
+          }'
+
+          DEPLOYED_FLAG=$(echo "$LAMBDA_ENV" | jq -r '.WHATSAPP_WEB_ENABLED // ""')
+          if [ "$DEPLOYED_FLAG" != "true" ]; then
+            echo "::warning::splitbot-prod was deployed with WhatsApp Web disabled"
+          fi
+
+          API_ID=$(aws apigatewayv2 get-apis \
+            --query "Items[?Name=='splitbot-prod-api'].ApiId | [0]" \
+            --output text)
+          if [ -n "$API_ID" ] && [ "$API_ID" != "None" ]; then
+            ROUTE_TARGET=$(aws apigatewayv2 get-routes \
+              --api-id "$API_ID" \
+              --query "Items[?RouteKey=='POST /wa-web/inbound'].Target | [0]" \
+              --output text)
+            INTEGRATION_ID=${ROUTE_TARGET#integrations/}
+            INTEGRATION_URI=$(aws apigatewayv2 get-integration \
+              --api-id "$API_ID" \
+              --integration-id "$INTEGRATION_ID" \
+              --query 'IntegrationUri' \
+              --output text)
+
+            if [[ "$INTEGRATION_URI" == *":function:splitbot-prod/invocations" ]]; then
+              echo "✅ POST /wa-web/inbound points to splitbot-prod"
+            else
+              echo "::warning::POST /wa-web/inbound integration is unexpected: $INTEGRATION_URI"
+            fi
+          else
+            echo "::warning::splitbot-prod API Gateway was not found"
+          fi
 
       - name: Get Webhook URL
         id: webhook
