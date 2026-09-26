@@ -122,24 +122,17 @@ client.on('message', async (msg) => {
       console.warn('Could not fetch contact for', msg.from, e.message);
     }
 
-    let chatName = '';
-    if (isGroup) {
-      try {
-        const chat = await msg.getChat();
-        chatName = chat.name || '';
-      } catch (e) {
-        console.warn('Could not fetch group metadata for', msg.from, e.message);
-      }
-    }
-
     const interactiveID = getInteractiveID(msg);
-    const isMentioned = isGroup && messageMentionsClient(msg);
+    const isMentioned = isGroup && await messageMentionsClient(msg);
 
     const payload = {
       chat_id: chatId,
       raw_jid: msg.from,
       chat_type: isGroup ? 'group' : 'private',
-      chat_name: chatName,
+      // The group name is cosmetic. Avoid calling getChat() here: some
+      // WhatsApp Web builds reject that metadata request for a fresh group,
+      // while message handling itself remains perfectly valid.
+      chat_name: '',
       sender_id: senderId,
       sender_jid: senderJid,
       from_name: displayName,
@@ -303,10 +296,25 @@ function getInteractiveID(msg) {
   return candidates.find((value) => typeof value === 'string' && value.length > 0) || '';
 }
 
-function messageMentionsClient(msg) {
+async function messageMentionsClient(msg) {
   const ownJid = client.info?.wid?._serialized;
-  if (!ownJid || !Array.isArray(msg.mentionedIds)) return false;
-  return msg.mentionedIds.some((mentionedJid) => sameWhatsAppIdentity(mentionedJid, ownJid));
+  if (!ownJid) return false;
+
+  if (Array.isArray(msg.mentionedIds)
+    && msg.mentionedIds.some((mentionedJid) => sameWhatsAppIdentity(mentionedJid, ownJid))) {
+    return true;
+  }
+
+  // Depending on the current WhatsApp Web build, mentionedIds may be absent
+  // even though the message is a real @mention. getMentions() resolves the
+  // same data through the library's supported API.
+  try {
+    const mentions = await msg.getMentions();
+    return mentions.some((contact) => sameWhatsAppIdentity(contact?.id?._serialized || contact?.number, ownJid));
+  } catch (error) {
+    console.warn('Could not resolve message mentions:', error.message);
+    return false;
+  }
 }
 
 function sameWhatsAppIdentity(left, right) {
@@ -320,7 +328,9 @@ function chatKey(chatId, chatType) {
 }
 
 function jidToRawID(jid) {
-  return String(jid || '').replace(/@(c\.us|g\.us|lid)$/, '');
+  // Device-qualified JIDs can look like 54911...:17@c.us while an @mention
+  // contains 54911...@c.us. The device suffix is not part of the identity.
+  return String(jid || '').replace(/@(c\.us|g\.us|lid)$/, '').split(':')[0];
 }
 
 function isNumericWhatsAppID(value) {
