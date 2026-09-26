@@ -53,6 +53,10 @@ const client = new Client({
 let isReady = false;
 let pendingQR = null;
 let linkingPaused = false;
+// WhatsApp may identify private chats by phone (`@c.us`) or by a Linked ID
+// (`@lid`). Keep the real JID received from WhatsApp so replies target the
+// same conversation instead of assuming every private chat is `@c.us`.
+const inboundChatJIDs = new Map();
 
 client.on('qr', (qr) => {
   linkingPaused = false;
@@ -89,12 +93,13 @@ client.on('message', async (msg) => {
     const isGroup = msg.from.endsWith('@g.us');
     if (isGroup && !ALLOW_GROUPS) return;
 
-    const rawId = msg.from.replace(/@(c|g)\.us$/, '');
+    const rawId = msg.from.replace(/@(c\.us|g\.us|lid)$/, '');
     const chatId = Number(rawId);
-    if (!Number.isFinite(chatId)) {
+    if (!Number.isSafeInteger(chatId)) {
       console.warn('Cannot parse chat id from', msg.from);
       return;
     }
+    inboundChatJIDs.set(chatKey(chatId, isGroup ? 'group' : 'private'), msg.from);
 
     let displayName = rawId;
     try {
@@ -200,8 +205,9 @@ app.post('/send', async (req, res) => {
     return res.status(400).json({ ok: false, error: 'missing chat_id or text' });
   }
 
-  const suffix = chat_type === 'group' ? '@g.us' : '@c.us';
-  const jid = `${chat_id}${suffix}`;
+  const jid = chat_type === 'group'
+    ? `${chat_id}@g.us`
+    : inboundChatJIDs.get(chatKey(chat_id, 'private')) ?? `${chat_id}@c.us`;
 
   try {
     const sanitized = stripHtmlForWhatsApp(String(text));
@@ -222,6 +228,10 @@ function stripHtmlForWhatsApp(text) {
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>');
+}
+
+function chatKey(chatId, chatType) {
+  return `${chatType}:${chatId}`;
 }
 
 function requireQRAuth(req, res, next) {
