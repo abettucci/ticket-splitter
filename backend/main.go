@@ -384,6 +384,7 @@ func handleWaWebInbound(ctx context.Context, request events.APIGatewayProxyReque
 	update := &telegram.Update{
 		Message: &telegram.Message{
 			Text:          text,
+			QuotedText:    payload.QuotedText,
 			InteractiveID: payload.InteractiveID,
 			IsMentioned:   payload.IsMentioned,
 			From: &telegram.User{

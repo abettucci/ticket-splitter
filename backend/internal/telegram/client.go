@@ -39,11 +39,12 @@ type Update struct {
 
 // Message representa un mensaje de Telegram
 type Message struct {
-	MessageID int64  `json:"message_id"`
-	From      *User  `json:"from,omitempty"`
-	Chat      *Chat  `json:"chat"`
-	Date      int64  `json:"date"`
-	Text      string `json:"text,omitempty"`
+	MessageID  int64  `json:"message_id"`
+	From       *User  `json:"from,omitempty"`
+	Chat       *Chat  `json:"chat"`
+	Date       int64  `json:"date"`
+	Text       string `json:"text,omitempty"`
+	QuotedText string `json:"-"`
 	// InteractiveID is populated by WhatsApp interactive lists/buttons. It is
 	// intentionally separate from Text so a user cannot accidentally trigger
 	// a callback by typing its internal identifier.

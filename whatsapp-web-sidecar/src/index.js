@@ -123,8 +123,9 @@ client.on('message', async (msg) => {
     }
 
     const interactiveID = getInteractiveID(msg);
+    const replyContext = isGroup ? await getBotReplyContext(msg) : { isReplyToClient: false, quotedText: '' };
     const isMentioned = isGroup && (
-      await messageMentionsClient(msg) || await messageRepliesToClient(msg)
+      await messageMentionsClient(msg) || replyContext.isReplyToClient
     );
 
     const payload = {
@@ -139,6 +140,7 @@ client.on('message', async (msg) => {
       sender_jid: senderJid,
       from_name: displayName,
       text: msg.body || '',
+      quoted_text: replyContext.quotedText,
       interactive_id: interactiveID,
       is_mentioned: isMentioned,
       message_id: msg.id?._serialized || '',
@@ -295,19 +297,25 @@ async function messageMentionsClient(msg) {
 // A reply to Splitter's menu is an intentional bot interaction too. This is
 // especially important for the numbered fallback: users naturally tap Reply
 // and type "1", without writing another @mention.
-async function messageRepliesToClient(msg) {
+async function getBotReplyContext(msg) {
   const ownJid = client.info?.wid?._serialized;
   // Group replies identify their quoted message author separately from the
   // group chat (`from`). Different WhatsApp Web builds expose either the
   // public flag or the underlying quoted stanza ID.
-  if (!ownJid || (!msg.hasQuotedMsg && !msg._data?.quotedStanzaID)) return false;
+  if (!ownJid || (!msg.hasQuotedMsg && !msg._data?.quotedStanzaID)) {
+    return { isReplyToClient: false, quotedText: '' };
+  }
 
   try {
     const quoted = await msg.getQuotedMessage();
-    return sameWhatsAppIdentity(quoted?.author || quoted?.from, ownJid);
+    const isReplyToClient = sameWhatsAppIdentity(quoted?.author || quoted?.from, ownJid);
+    return {
+      isReplyToClient,
+      quotedText: isReplyToClient ? String(quoted?.body || '') : '',
+    };
   } catch (error) {
     console.warn('Could not resolve quoted message:', error.message);
-    return false;
+    return { isReplyToClient: false, quotedText: '' };
   }
 }
 

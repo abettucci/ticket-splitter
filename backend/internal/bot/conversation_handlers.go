@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -251,15 +252,16 @@ func (h *Handler) handleConversationStep(ctx context.Context, chatID, userID int
 		return h.resolvePayerFromText(ctx, chatID, userID, userName, text, state)
 
 	case StepSelectDivideExpense:
-		h.conv.Clear(chatID, userID)
 		// Intentar número primero
 		if n, err := strconv.Atoi(strings.TrimSpace(text)); err == nil {
 			if shortID, ok := state.DivideOptions[n]; ok {
+				h.conv.Clear(chatID, userID)
 				return h.handleDivide(ctx, chatID, userID, []string{shortID})
 			}
 			return h.tg.SendMessage(ctx, chatID, fmt.Sprintf("❌ Opción %d no válida. Escribí «dividir» para ver la lista de nuevo.", n))
 		}
 		// Intentar como shortID directo
+		h.conv.Clear(chatID, userID)
 		return h.handleDivide(ctx, chatID, userID, []string{strings.TrimSpace(text)})
 
 	case StepSelectRedivideExpense:
@@ -558,4 +560,62 @@ func (h *Handler) handleMenuNumber(ctx context.Context, chatID, userID int64, te
 	default:
 		return false, nil
 	}
+}
+
+var shortExpenseIDPattern = regexp.MustCompile(`(?i)\b[a-f0-9]{8}\b`)
+
+// handleQuotedMenuChoice resolves a numeric reply against the bot message it
+// quotes, instead of against whichever temporary conversation happened last.
+// This lets people return to an older menu after viewing expenses.
+func (h *Handler) handleQuotedMenuChoice(ctx context.Context, chatID, userID int64, text, quotedText string) (bool, error) {
+	selection := strings.TrimSpace(text)
+	quotedLower := strings.ToLower(quotedText)
+
+	if strings.Contains(quotedLower, "¿qué querés hacer?") && strings.Contains(quotedLower, "dividir gasto") {
+		if _, err := strconv.Atoi(selection); err != nil {
+			return false, nil
+		}
+		h.conv.Clear(chatID, userID)
+		return h.handleMenuNumber(ctx, chatID, userID, selection)
+	}
+
+	if strings.Contains(quotedLower, "¿qué gasto querés dividir?") {
+		n, err := strconv.Atoi(selection)
+		if err != nil || n < 1 {
+			return false, nil
+		}
+
+		expenses, err := h.db.GetGroupExpenses(ctx, chatID, 10)
+		if err != nil {
+			return true, h.tg.SendMessage(ctx, chatID, "❌ Error al obtener los gastos.")
+		}
+		position := 0
+		for _, expense := range expenses {
+			if expense.IsDivided {
+				continue
+			}
+			position++
+			if position == n {
+				h.conv.Clear(chatID, userID)
+				return true, h.handleDivide(ctx, chatID, userID, []string{expense.ID[:8]})
+			}
+		}
+		return true, h.tg.SendMessage(ctx, chatID, fmt.Sprintf("❌ Opción %d no válida. Respondé con un gasto de la lista citada.", n))
+	}
+
+	if strings.Contains(quotedLower, "gasto registrado") && strings.Contains(quotedLower, "dividir entre todos") {
+		if selection != "1" && !strings.Contains(strings.ToLower(selection), "dividir") {
+			if selection == "2" || strings.Contains(strings.ToLower(selection), "ver gasto") {
+				h.conv.Clear(chatID, userID)
+				return true, h.handleViewExpenses(ctx, chatID)
+			}
+			return false, nil
+		}
+		if shortID := shortExpenseIDPattern.FindString(quotedText); shortID != "" {
+			h.conv.Clear(chatID, userID)
+			return true, h.handleDivide(ctx, chatID, userID, []string{shortID})
+		}
+	}
+
+	return false, nil
 }

@@ -86,6 +86,14 @@ func (h *Handler) HandleUpdate(ctx context.Context, update *telegram.Update) err
 
 	// Procesar comandos
 	text := strings.TrimSpace(msg.Text)
+	// In WhatsApp groups, a reply can target an older bot message while a newer
+	// conversation state is still active. The quoted menu is more specific than
+	// that transient state, so resolve it first.
+	if msg.QuotedText != "" {
+		if handled, err := h.handleQuotedMenuChoice(ctx, chatID, userID, text, msg.QuotedText); handled {
+			return err
+		}
+	}
 	if !strings.HasPrefix(text, "/") {
 		// Verificar si hay una conversación activa para este usuario
 		state := h.conv.Get(chatID, userID)

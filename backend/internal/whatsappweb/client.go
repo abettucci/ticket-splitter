@@ -159,6 +159,7 @@ type InboundPayload struct {
 	IsMentioned   bool      `json:"is_mentioned"`
 	FromName      string    `json:"from_name"`
 	Text          string    `json:"text"`
+	QuotedText    string    `json:"quoted_text"`
 	MessageID     string    `json:"message_id"`
 	Timestamp     int64     `json:"timestamp"`
 }
