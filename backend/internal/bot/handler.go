@@ -126,9 +126,9 @@ func (h *Handler) HandleUpdate(ctx context.Context, update *telegram.Update) err
 
 	switch command {
 	case "/start":
-		return h.handleStart(ctx, chatID, displayName)
+		return h.handleStart(ctx, chatID, userID, displayName)
 	case "/menu":
-		return h.handleMenu(ctx, chatID)
+		return h.handleMenu(ctx, chatID, userID)
 	case "/cancelar", "/cancel":
 		h.conv.Clear(chatID, userID)
 		return h.tg.SendMessage(ctx, chatID, "❌ Operación cancelada.")
@@ -337,7 +337,7 @@ Usa /ver_gastos para ver tus gastos.`, shortID)
 }
 
 // handleStart maneja el comando /start
-func (h *Handler) handleStart(ctx context.Context, chatID int64, userName string) error {
+func (h *Handler) handleStart(ctx context.Context, chatID, userID int64, userName string) error {
 	escapedName := telegram.EscapeHTML(userName)
 
 	message := fmt.Sprintf(`👋 ¡Hola %s! Bienvenido a <b>SplitBot</b>
@@ -357,7 +357,7 @@ func (h *Handler) handleStart(ctx context.Context, chatID int64, userName string
 	if err := h.tg.SendMessage(ctx, chatID, message); err != nil {
 		return err
 	}
-	return h.handleMenu(ctx, chatID)
+	return h.handleMenu(ctx, chatID, userID)
 }
 
 // handleHelp maneja el comando /help

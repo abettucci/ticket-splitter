@@ -123,7 +123,9 @@ client.on('message', async (msg) => {
     }
 
     const interactiveID = getInteractiveID(msg);
-    const isMentioned = isGroup && await messageMentionsClient(msg);
+    const isMentioned = isGroup && (
+      await messageMentionsClient(msg) || await messageRepliesToClient(msg)
+    );
 
     const payload = {
       chat_id: chatId,
@@ -286,6 +288,22 @@ async function messageMentionsClient(msg) {
     return mentions.some((contact) => sameWhatsAppIdentity(contact?.id?._serialized || contact?.number, ownJid));
   } catch (error) {
     console.warn('Could not resolve message mentions:', error.message);
+    return false;
+  }
+}
+
+// A reply to Splitter's menu is an intentional bot interaction too. This is
+// especially important for the numbered fallback: users naturally tap Reply
+// and type "1", without writing another @mention.
+async function messageRepliesToClient(msg) {
+  const ownJid = client.info?.wid?._serialized;
+  if (!ownJid || !msg.hasQuotedMsg) return false;
+
+  try {
+    const quoted = await msg.getQuotedMessage();
+    return sameWhatsAppIdentity(quoted?.from, ownJid);
+  } catch (error) {
+    console.warn('Could not resolve quoted message:', error.message);
     return false;
   }
 }

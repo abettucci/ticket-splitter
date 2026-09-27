@@ -11,7 +11,11 @@ import (
 )
 
 // handleMenu muestra el menú principal con botones inline
-func (h *Handler) handleMenu(ctx context.Context, chatID int64) error {
+func (h *Handler) handleMenu(ctx context.Context, chatID int64, userID ...int64) error {
+	if len(userID) > 0 {
+		h.conv.Set(chatID, userID[0], &ConversationState{Step: StepSelectMenuOption})
+	}
+
 	keyboard := telegram.InlineKeyboardMarkup{
 		InlineKeyboard: [][]telegram.InlineKeyboardButton{
 			{
@@ -192,6 +196,13 @@ func (h *Handler) handleConversationStep(ctx context.Context, chatID, userID int
 	}
 
 	switch state.Step {
+	case StepSelectMenuOption:
+		h.conv.Clear(chatID, userID)
+		if handled, err := h.handleMenuNumber(ctx, chatID, userID, text); handled {
+			return err
+		}
+		return h.tg.SendMessage(ctx, chatID, "❌ Opción no válida. Mencioná a Splitter o escribí «menu» para ver las opciones de nuevo.")
+
 	case StepNewExpenseDescription:
 		description, valid := security.ValidateDescription(text)
 		if !valid {
@@ -421,22 +432,10 @@ func (h *Handler) createExpenseFromConversation(ctx context.Context, chatID, use
 func (h *Handler) handleNaturalLanguage(ctx context.Context, chatID, userID int64, userName, text string, showMenuOnUnknown bool) error {
 	lower := strings.ToLower(strings.TrimSpace(text))
 
-	// Acceso por número: sirve de respaldo cuando una lista interactiva no se
-	// muestra en un cliente de WhatsApp.
-	menuNumbers := map[string]func() error{
-		"1":  func() error { return h.startExpenseFlow(ctx, chatID, userID) },
-		"2":  func() error { return h.handleViewExpenses(ctx, chatID) },
-		"3":  func() error { return h.handleMyDebts(ctx, chatID, userID) },
-		"4":  func() error { return h.handleBalance(ctx, chatID) },
-		"5":  func() error { return h.handleMenuDivide(ctx, chatID, userID) },
-		"6":  func() error { return h.handleMenuRedivide(ctx, chatID, userID) },
-		"7":  func() error { return h.handleMyReminders(ctx, chatID, userID) },
-		"8":  func() error { return h.handleRemindDebtors(ctx, chatID, userID) },
-		"9":  func() error { return h.handleMembers(ctx, chatID) },
-		"10": func() error { return h.handleHelp(ctx, chatID) },
-	}
-	if fn, ok := menuNumbers[lower]; ok {
-		return fn()
+	// Acceso por número: sirve de respaldo en WhatsApp y también funciona si
+	// la persona responde citando el mensaje del bot.
+	if handled, err := h.handleMenuNumber(ctx, chatID, userID, lower); handled {
+		return err
 	}
 
 	type trigger struct {
@@ -447,7 +446,7 @@ func (h *Handler) handleNaturalLanguage(ctx context.Context, chatID, userID int6
 	triggers := []trigger{
 		{
 			keywords: []string{"hola", "holi", "buenas", "buenos dias", "buenos días", "buen dia", "buen día"},
-			action:   func() error { return h.handleMenu(ctx, chatID) },
+			action:   func() error { return h.handleMenu(ctx, chatID, userID) },
 		},
 		{
 			keywords: []string{"nuevo gasto", "gasto nuevo", "agregar gasto", "anotar gasto", "cargar gasto", "cargar un gasto", "registrar gasto", "sumar gasto", "nuevo", "gasto"},
@@ -495,7 +494,7 @@ func (h *Handler) handleNaturalLanguage(ctx context.Context, chatID, userID int6
 		},
 		{
 			keywords: []string{"menú", "menu", "opciones", "qué puedo hacer", "que puedo hacer", "inicio"},
-			action:   func() error { return h.handleMenu(ctx, chatID) },
+			action:   func() error { return h.handleMenu(ctx, chatID, userID) },
 		},
 	}
 
@@ -508,9 +507,38 @@ func (h *Handler) handleNaturalLanguage(ctx context.Context, chatID, userID int6
 	}
 
 	if showMenuOnUnknown {
-		return h.handleMenu(ctx, chatID)
+		return h.handleMenu(ctx, chatID, userID)
 	}
 
 	// No match - suggest the menu
 	return h.tg.SendMessage(ctx, chatID, "🤖 No entendí eso. Escribí /menu o pedime una opción como «nuevo gasto», «recordatorios» o «balance».")
+}
+
+// handleMenuNumber ejecuta una opción del menú de texto. El bool permite
+// distinguir una opción inválida de un error de negocio al procesarla.
+func (h *Handler) handleMenuNumber(ctx context.Context, chatID, userID int64, text string) (bool, error) {
+	switch strings.TrimSpace(text) {
+	case "1":
+		return true, h.startExpenseFlow(ctx, chatID, userID)
+	case "2":
+		return true, h.handleViewExpenses(ctx, chatID)
+	case "3":
+		return true, h.handleMyDebts(ctx, chatID, userID)
+	case "4":
+		return true, h.handleBalance(ctx, chatID)
+	case "5":
+		return true, h.handleMenuDivide(ctx, chatID, userID)
+	case "6":
+		return true, h.handleMenuRedivide(ctx, chatID, userID)
+	case "7":
+		return true, h.handleMyReminders(ctx, chatID, userID)
+	case "8":
+		return true, h.handleRemindDebtors(ctx, chatID, userID)
+	case "9":
+		return true, h.handleMembers(ctx, chatID)
+	case "10":
+		return true, h.handleHelp(ctx, chatID)
+	default:
+		return false, nil
+	}
 }

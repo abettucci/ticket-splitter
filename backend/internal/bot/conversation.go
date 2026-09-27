@@ -14,6 +14,7 @@ const (
 	StepNewExpenseDescription
 	StepNewExpenseAmount
 	StepNewExpensePayer
+	StepSelectMenuOption      // selección del menú numerado de WhatsApp
 	StepSelectDivideExpense   // selección de gasto a dividir (para WhatsApp sin botones)
 	StepSelectRedivideExpense // selección de gasto a redividir (para WhatsApp sin botones)
 )
