@@ -297,11 +297,14 @@ async function messageMentionsClient(msg) {
 // and type "1", without writing another @mention.
 async function messageRepliesToClient(msg) {
   const ownJid = client.info?.wid?._serialized;
-  if (!ownJid || !msg.hasQuotedMsg) return false;
+  // Group replies identify their quoted message author separately from the
+  // group chat (`from`). Different WhatsApp Web builds expose either the
+  // public flag or the underlying quoted stanza ID.
+  if (!ownJid || (!msg.hasQuotedMsg && !msg._data?.quotedStanzaID)) return false;
 
   try {
     const quoted = await msg.getQuotedMessage();
-    return sameWhatsAppIdentity(quoted?.from, ownJid);
+    return sameWhatsAppIdentity(quoted?.author || quoted?.from, ownJid);
   } catch (error) {
     console.warn('Could not resolve quoted message:', error.message);
     return false;
