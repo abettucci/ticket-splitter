@@ -196,6 +196,19 @@ func (h *Handler) handleConversationStep(ctx context.Context, chatID, userID int
 	}
 
 	switch state.Step {
+	case StepSelectNewExpenseAction:
+		lower := strings.ToLower(strings.TrimSpace(text))
+		switch {
+		case lower == "1" || strings.Contains(lower, "dividir"):
+			h.conv.Clear(chatID, userID)
+			return h.handleDivide(ctx, chatID, userID, []string{state.ExpenseShortID})
+		case lower == "2" || strings.Contains(lower, "ver gasto"):
+			h.conv.Clear(chatID, userID)
+			return h.handleViewExpenses(ctx, chatID)
+		default:
+			return h.tg.SendMessage(ctx, chatID, "❌ Elegí 1 para dividir el gasto recién creado o 2 para ver los gastos.")
+		}
+
 	case StepSelectMenuOption:
 		h.conv.Clear(chatID, userID)
 		if handled, err := h.handleMenuNumber(ctx, chatID, userID, text); handled {
@@ -411,6 +424,10 @@ func (h *Handler) createExpenseFromConversation(ctx context.Context, chatID, use
 			},
 		},
 	}
+	h.conv.Set(chatID, userID, &ConversationState{
+		Step:           StepSelectNewExpenseAction,
+		ExpenseShortID: shortID,
+	})
 
 	return h.tg.SendMessageWithOptions(ctx, &telegram.SendMessageRequest{
 		ChatID: chatID,
