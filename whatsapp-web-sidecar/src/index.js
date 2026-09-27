@@ -311,7 +311,11 @@ async function getBotReplyContext(msg) {
     const isReplyToClient = sameWhatsAppIdentity(quoted?.author || quoted?.from, ownJid);
     return {
       isReplyToClient,
-      quotedText: isReplyToClient ? String(quoted?.body || '') : '',
+      // Some group replies expose the quoted author as the group JID, so the
+      // identity check above can be inconclusive. Forward the quoted body in
+      // either case; the Go backend only recognizes its own fixed menu text
+      // before it performs an action.
+      quotedText: String(quoted?.body || ''),
     };
   } catch (error) {
     console.warn('Could not resolve quoted message:', error.message);
