@@ -1,18 +1,18 @@
 import { Card, CardContent } from "@/components/ui/card";
-import { UserPlus, Receipt, Calculator, Bell } from "lucide-react";
+import { UserPlus, Receipt, Calculator, Bell, WalletCards, Scale, CircleCheckBig } from "lucide-react";
 
 const steps = [
   {
     icon: UserPlus,
     step: "1",
     title: "Sumalo al grupo",
-    description: "Agregá SplitBot a tu grupo de Telegram o WhatsApp. Cada integrante envía /start una vez."
+    description: "Sumá Splitter a un grupo de Telegram o WhatsApp. Cada persona se presenta una vez y listo."
   },
   {
     icon: Receipt,
     step: "2", 
     title: "Registra gastos",
-    description: "Usa /nuevo_gasto Cena 15000 para registrar cualquier gasto del grupo."
+    description: "Elegí “Nuevo gasto”, contá qué pagaste y cargá el monto. También podés escribirlo como lo dirías normalmente."
   },
   {
     icon: Calculator,
@@ -24,7 +24,7 @@ const steps = [
     icon: Bell,
     step: "4",
     title: "Recordá y saldá",
-    description: "Mandá /recordar_deudas y el bot avisa por privado a quienes ya iniciaron su chat con él."
+    description: "Pedile que avise las deudas y cada persona recibe el recordatorio por privado cuando corresponda."
   }
 ];
 
@@ -35,7 +35,7 @@ export const HowItWorks = () => {
         <div className="text-center mb-16">
           <h2 className="text-4xl lg:text-5xl font-bold text-slate-900 mb-6">
             ¿Cómo funciona
-            <span className="bg-gradient-to-r from-[#0088cc] to-[#00a8e8] bg-clip-text text-transparent"> SplitBot</span>?
+            <span className="bg-gradient-to-r from-teal-700 to-emerald-500 bg-clip-text text-transparent"> Splitter</span>?
           </h2>
           <p className="text-xl text-slate-600 max-w-2xl mx-auto">
             En 4 pasos simples tendrás todos los gastos de tu grupo organizados y divididos automáticamente.
@@ -48,7 +48,7 @@ export const HowItWorks = () => {
               <Card className="bg-gradient-to-br from-slate-50 to-white shadow-lg border border-slate-100 p-8 hover:shadow-xl transition-all duration-300 group relative z-10">
                 <CardContent className="p-0">
                   <div className="relative mb-6">
-                    <div className="bg-gradient-to-br from-[#0088cc] to-[#00a8e8] p-4 rounded-2xl w-20 h-20 mx-auto flex items-center justify-center group-hover:scale-110 transition-transform duration-300 shadow-lg">
+                    <div className="bg-gradient-to-br from-teal-700 to-emerald-500 p-4 rounded-2xl w-20 h-20 mx-auto flex items-center justify-center group-hover:scale-110 transition-transform duration-300 shadow-lg shadow-emerald-900/15">
                       <step.icon className="h-8 w-8 text-white" />
                     </div>
                     <div className="absolute -top-2 -right-2 bg-amber-400 text-amber-900 rounded-full w-8 h-8 flex items-center justify-center text-sm font-bold shadow">
@@ -62,30 +62,34 @@ export const HowItWorks = () => {
               
               {index < steps.length - 1 && (
                 <div className="hidden lg:block absolute top-1/2 -right-4 transform -translate-y-1/2 z-0">
-                  <div className="w-8 h-1 bg-gradient-to-r from-[#0088cc] to-[#00a8e8] rounded-full"></div>
+                  <div className="w-8 h-1 bg-gradient-to-r from-teal-700 to-emerald-500 rounded-full"></div>
                 </div>
               )}
             </div>
           ))}
         </div>
 
-        {/* Comandos disponibles */}
         <div className="mt-20 bg-slate-900 rounded-3xl p-8 lg:p-12">
-          <h3 className="text-2xl lg:text-3xl font-bold text-white text-center mb-8">
-            Comandos disponibles
-          </h3>
+          <div className="max-w-2xl mx-auto text-center mb-8">
+            <h3 className="text-2xl lg:text-3xl font-bold text-white">
+              En el chat, podés…
+            </h3>
+            <p className="text-slate-400 mt-3">
+              Elegir desde el menú o escribirlo con tus propias palabras. Sin aprender sintaxis rara.
+            </p>
+          </div>
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4 max-w-4xl mx-auto">
             {[
-              { cmd: "/nuevo_gasto [desc] [monto]", desc: "Crear un gasto" },
-              { cmd: "/ver_gastos", desc: "Ver últimos gastos" },
-              { cmd: "/dividir [id]", desc: "Dividir un gasto" },
-              { cmd: "/mis_deudas", desc: "Ver tus deudas" },
-              { cmd: "/pagar [id]", desc: "Marcar como pagado" },
-              { cmd: "/balance", desc: "Ver balance grupal" },
-              { cmd: "/recordar_deudas", desc: "Avisar deudas por privado" },
+              { icon: Receipt, title: "Cargar un gasto", desc: "Contá qué se pagó y cuánto." },
+              { icon: WalletCards, title: "Ver los gastos", desc: "Revisá lo que lleva el grupo." },
+              { icon: Scale, title: "Dividir en un toque", desc: "Repartí entre quienes participaron." },
+              { icon: CircleCheckBig, title: "Marcar un pago", desc: "Mantené las cuentas al día." },
+              { icon: Calculator, title: "Ver el balance", desc: "Sabé quién debe y quién recibe." },
+              { icon: Bell, title: "Recordar una deuda", desc: "Avisá por privado, sin perseguir a nadie." },
             ].map((item, index) => (
-              <div key={index} className="bg-slate-800 rounded-xl p-4">
-                <code className="text-cyan-400 font-mono text-sm">{item.cmd}</code>
+              <div key={index} className="bg-slate-800 rounded-xl p-5 border border-white/5">
+                <item.icon className="h-5 w-5 text-emerald-300 mb-3" />
+                <h4 className="text-white font-semibold">{item.title}</h4>
                 <p className="text-slate-400 text-sm mt-1">{item.desc}</p>
               </div>
             ))}

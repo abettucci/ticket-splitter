@@ -1,16 +1,16 @@
 import { Card, CardContent } from "@/components/ui/card";
-import { Send, Calculator, Receipt, Users, Clock, Shield, Lock, MessageCircle } from "lucide-react";
+import { Calculator, Receipt, Users, Clock, Shield, Lock, MessageCircle } from "lucide-react";
 
 const features = [
   {
-    icon: Send,
-    title: "Telegram y WhatsApp",
-    description: "Usalo desde el chat que ya tenés abierto: Telegram o WhatsApp Web, sin instalar otra app."
+    icon: MessageCircle,
+    title: "En el chat que ya usás",
+    description: "Organizá gastos desde Telegram o WhatsApp, sin sumar otra aplicación a la rutina."
   },
   {
     icon: MessageCircle,
     title: "Grupos de WhatsApp",
-    description: "Agregá el bot al grupo, hacé que cada integrante envíe /start y dividí gastos ahí mismo."
+    description: "Sumalo al grupo, hacé que cada integrante se presente una vez y llevá las cuentas ahí mismo."
   },
   {
     icon: Calculator,
@@ -20,7 +20,7 @@ const features = [
   {
     icon: Clock,
     title: "Recordatorios privados",
-    description: "Desde el grupo, avisá por privado a quienes deben pagar. Cada persona habilita el contacto con /start."
+    description: "Desde el grupo, avisá por privado a quienes deben pagar cuando ya hayan iniciado un chat con Splitter."
   },
   {
     icon: Users,
@@ -30,12 +30,12 @@ const features = [
   {
     icon: Clock,
     title: "Historial completo",
-    description: "Accede al historial completo de gastos y pagos con comandos simples."
+    description: "Revisá gastos, pagos y balances desde el menú o con una frase simple."
   },
   {
     icon: Shield,
     title: "Seguridad de nivel empresarial",
-    description: "Encriptación AES-256, WAF, rate limiting y protección contra DDoS incluidos."
+    description: "Protegemos las operaciones del bot y evitamos exponer tus cuentas al resto del grupo."
   },
   {
     icon: Lock,
@@ -56,7 +56,7 @@ export const Features = () => {
         <div className="text-center mb-16">
           <h2 className="text-4xl lg:text-5xl font-bold text-slate-900 mb-6">
             Todo lo que necesitas para
-            <span className="bg-gradient-to-r from-[#0088cc] to-[#00a8e8] bg-clip-text text-transparent"> dividir gastos</span>
+            <span className="bg-gradient-to-r from-teal-700 to-emerald-500 bg-clip-text text-transparent"> dividir gastos</span>
           </h2>
           <p className="text-xl text-slate-600 max-w-3xl mx-auto">
             Desde gastos simples hasta viajes complicados, nuestro bot maneja todo tipo de divisiones de manera inteligente y segura.
@@ -68,7 +68,7 @@ export const Features = () => {
             <Card key={index} className="bg-white shadow-lg border-0 p-6 hover:shadow-xl hover:-translate-y-1 transition-all duration-300 group">
               <CardContent className="p-0">
                 <div className="flex items-center mb-4">
-                  <div className="bg-gradient-to-br from-[#0088cc] to-[#00a8e8] p-3 rounded-xl mr-4 group-hover:scale-110 transition-transform duration-300">
+                  <div className="bg-gradient-to-br from-teal-700 to-emerald-500 p-3 rounded-xl mr-4 group-hover:scale-110 transition-transform duration-300">
                     <feature.icon className="h-6 w-6 text-white" />
                   </div>
                 </div>

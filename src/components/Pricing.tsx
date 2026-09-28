@@ -1,23 +1,18 @@
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Check, Sparkles, Gift } from "lucide-react";
+import { Check, Sparkles, Gift, MessageCircle } from "lucide-react";
+import { Link } from "react-router-dom";
 
 export const Pricing = () => {
-  const telegramBotUrl = "https://t.me/YourSplitBot"; // Reemplazar con tu bot
-
   const features = [
-    "Gastos ilimitados",
-    "Grupos ilimitados",
-    "Miembros ilimitados",
-    "División automática",
-    "Historial completo",
-    "Balance grupal",
-    "Comandos intuitivos",
-    "Seguridad de nivel empresarial",
-    "Encriptación de datos",
-    "Sin anuncios",
-    "Sin tracking",
-    "Código abierto",
+    "Gastos, grupos y miembros sin límites",
+    "División automática y balance claro",
+    "Historial de gastos y pagos",
+    "Recordatorios privados",
+    "Telegram y WhatsApp",
+    "Menú simple y lenguaje natural",
+    "Sin anuncios ni seguimiento",
+    "Tus datos, siempre privados",
   ];
 
   return (
@@ -26,35 +21,35 @@ export const Pricing = () => {
         <div className="text-center mb-16">
           <div className="inline-flex items-center gap-2 bg-green-500/20 px-4 py-2 rounded-full mb-6">
             <Gift className="h-5 w-5 text-green-400" />
-            <span className="text-green-400 font-medium">100% Gratuito</span>
+            <span className="text-green-400 font-medium">MVP gratuito</span>
           </div>
           
           <h2 className="text-4xl lg:text-5xl font-bold text-white mb-6">
-            Sin planes, sin costos, 
-            <span className="bg-gradient-to-r from-[#0088cc] to-cyan-400 bg-clip-text text-transparent"> sin límites</span>
+            Sin planes, sin vueltas,
+            <span className="bg-gradient-to-r from-emerald-400 to-teal-300 bg-clip-text text-transparent"> para ordenar las cuentas</span>
           </h2>
           <p className="text-xl text-slate-300 max-w-2xl mx-auto">
-            Creemos que dividir gastos debería ser gratis. Por eso SplitBot no tiene planes pagos, ni anuncios, ni trucos.
+            Splitter está pensado para que organizar gastos entre amigos, familia o viajes no te agregue otro problema.
           </p>
         </div>
         
         <div className="max-w-2xl mx-auto">
-          <Card className="bg-gradient-to-br from-slate-800 to-slate-900 border-2 border-[#0088cc] shadow-2xl shadow-cyan-500/20 p-8 relative overflow-hidden">
+          <Card className="bg-gradient-to-br from-slate-800 to-slate-900 border-2 border-emerald-500/70 shadow-2xl shadow-emerald-500/15 px-8 pb-8 pt-14 relative overflow-visible">
             {/* Decoración */}
-            <div className="absolute top-0 right-0 w-40 h-40 bg-gradient-to-br from-[#0088cc]/20 to-transparent rounded-full blur-3xl" />
+            <div className="absolute top-0 right-0 w-40 h-40 bg-gradient-to-br from-emerald-400/20 to-transparent rounded-full blur-3xl" />
             
-            <div className="absolute -top-4 left-1/2 transform -translate-x-1/2 bg-gradient-to-r from-[#0088cc] to-cyan-500 text-white px-6 py-2 rounded-full flex items-center gap-2 shadow-lg">
+            <div className="absolute -top-4 left-1/2 -translate-x-1/2 bg-gradient-to-r from-teal-700 to-emerald-500 text-white px-6 py-2 rounded-full flex items-center gap-2 shadow-lg whitespace-nowrap">
               <Sparkles className="h-4 w-4" />
-              <span className="font-semibold">Gratis para siempre</span>
+              <span className="font-semibold">Gratis durante el MVP</span>
             </div>
             
             <CardHeader className="p-0 mb-8 text-center pt-4">
-              <CardTitle className="text-3xl font-bold text-white mb-2">SplitBot</CardTitle>
+              <CardTitle className="text-3xl font-bold text-white mb-2">Splitter</CardTitle>
               <div className="mb-4">
-                <span className="text-6xl font-bold text-[#0088cc]">$0</span>
+                <span className="text-6xl font-bold text-emerald-400">$0</span>
                 <span className="text-slate-400 ml-2 text-xl">/mes</span>
               </div>
-              <p className="text-slate-300">Todo lo que necesitas para dividir gastos. Sin excepciones.</p>
+              <p className="text-slate-300">Lo esencial para compartir gastos sin perder tiempo en cuentas.</p>
             </CardHeader>
             
             <CardContent className="p-0">
@@ -69,37 +64,17 @@ export const Pricing = () => {
                 ))}
               </div>
               
-              <Button 
-                className="w-full bg-gradient-to-r from-[#0088cc] to-cyan-500 hover:from-[#0077b5] hover:to-cyan-600 text-white text-lg py-6 rounded-xl shadow-lg shadow-cyan-500/25"
-                size="lg"
-                onClick={() => window.open(telegramBotUrl, '_blank')}
-              >
-                Comenzar ahora — Es gratis
+              <Button asChild className="w-full bg-gradient-to-r from-teal-700 to-emerald-500 hover:from-teal-800 hover:to-emerald-600 text-white text-lg py-6 rounded-xl shadow-lg shadow-emerald-500/20" size="lg">
+                <Link to="/dividir">Probar Splitter</Link>
               </Button>
             </CardContent>
           </Card>
         </div>
         
-        {/* Por qué es gratis */}
-        <div className="mt-20 text-center max-w-3xl mx-auto">
-          <h3 className="text-2xl font-bold text-white mb-6">¿Cómo puede ser gratis?</h3>
-          <div className="grid md:grid-cols-3 gap-6">
-            <div className="bg-slate-800/50 rounded-xl p-6">
-              <div className="text-3xl mb-3">🤖</div>
-              <h4 className="text-white font-semibold mb-2">Telegram es gratis</h4>
-              <p className="text-slate-400 text-sm">La API de Telegram no tiene costos por mensaje enviado.</p>
-            </div>
-            <div className="bg-slate-800/50 rounded-xl p-6">
-              <div className="text-3xl mb-3">☁️</div>
-              <h4 className="text-white font-semibold mb-2">AWS Free Tier</h4>
-              <p className="text-slate-400 text-sm">Lambda + DynamoDB gratis para bajo/medio tráfico.</p>
-            </div>
-            <div className="bg-slate-800/50 rounded-xl p-6">
-              <div className="text-3xl mb-3">💚</div>
-              <h4 className="text-white font-semibold mb-2">Open Source</h4>
-              <p className="text-slate-400 text-sm">Proyecto de código abierto mantenido por la comunidad.</p>
-            </div>
-          </div>
+        <div className="mt-14 flex flex-wrap items-center justify-center gap-3 text-sm text-slate-300">
+          <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2"><MessageCircle className="h-4 w-4 text-emerald-300" /> Telegram y WhatsApp</span>
+          <span className="rounded-full border border-white/10 bg-white/5 px-4 py-2">Sin anuncios</span>
+          <span className="rounded-full border border-white/10 bg-white/5 px-4 py-2">Sin planillas</span>
         </div>
       </div>
     </section>

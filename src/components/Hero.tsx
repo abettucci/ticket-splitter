@@ -1,13 +1,11 @@
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Send, Calculator, Users, Shield, MessageCircle } from "lucide-react";
+import { Calculator, Users, Shield, MessageCircle } from "lucide-react";
 import { Link } from "react-router-dom";
 
 export const Hero = () => {
-  const telegramBotUrl = "https://t.me/YourSplitBot"; // Reemplazar con tu bot
-
   return (
-    <section className="relative min-h-screen bg-gradient-to-br from-[#0088cc] via-[#0077b5] to-[#005a87] flex items-center justify-center overflow-hidden">
+    <section className="relative min-h-screen bg-gradient-to-br from-[#103b3b] via-[#155a5b] to-[#0b2933] flex items-center justify-center overflow-hidden">
       {/* Patrón de fondo */}
       <div className="absolute inset-0 opacity-10">
         <div className="absolute inset-0" style={{
@@ -28,7 +26,7 @@ export const Hero = () => {
 
             <h1 className="text-5xl lg:text-7xl font-bold text-white mb-6 leading-tight">
               Divide gastos en tus
-              <span className="block bg-gradient-to-r from-white to-cyan-200 bg-clip-text text-transparent">
+                <span className="block bg-gradient-to-r from-emerald-100 to-amber-100 bg-clip-text text-transparent">
                 chats de grupo
               </span>
             </h1>
@@ -39,25 +37,23 @@ export const Hero = () => {
             </p>
             
             <div className="flex flex-col sm:flex-row gap-4 justify-center lg:justify-start mb-12">
-              <Button 
-                size="lg" 
-                className="bg-white text-[#0088cc] hover:bg-white/90 text-lg px-8 py-6 rounded-full shadow-lg shadow-black/20 font-semibold"
-                onClick={() => window.open(telegramBotUrl, '_blank')}
-              >
-                <Send className="mr-2 h-5 w-5" />
-                Abrir en Telegram
-              </Button>
-              <Button asChild size="lg" variant="outline" className="border-2 border-white text-white hover:bg-white/10 text-lg px-8 py-6 rounded-full">
+              <Button asChild size="lg" className="bg-amber-300 text-slate-950 hover:bg-amber-200 text-lg px-8 py-6 rounded-full shadow-lg shadow-black/20 font-semibold">
                 <Link to="/dividir">
                   <Calculator className="mr-2 h-5 w-5" />
-                  Dividir online
+                  Empezar a dividir
                 </Link>
+              </Button>
+              <Button asChild size="lg" variant="outline" className="border-2 border-white/70 text-white hover:bg-white/10 text-lg px-8 py-6 rounded-full">
+                <a href="#how-it-works">
+                  <MessageCircle className="mr-2 h-5 w-5" />
+                  Usarlo en un grupo
+                </a>
               </Button>
             </div>
 
             <div className="flex flex-wrap gap-3 justify-center lg:justify-start mb-8">
               <div className="inline-flex items-center gap-2 rounded-full border border-white/25 bg-white/10 px-4 py-2 text-sm text-white">
-                <Send className="h-4 w-4 text-sky-200" />
+                <MessageCircle className="h-4 w-4 text-sky-200" />
                 Telegram
               </div>
               <div className="inline-flex items-center gap-2 rounded-full border border-emerald-300/40 bg-emerald-400/15 px-4 py-2 text-sm text-white">
@@ -76,7 +72,7 @@ export const Hero = () => {
                 <span>Cálculo automático</span>
               </div>
               <div className="flex items-center gap-2">
-                <Send className="h-5 w-5" />
+                <MessageCircle className="h-5 w-5" />
                 <span>Telegram + WhatsApp</span>
               </div>
             </div>
@@ -85,15 +81,15 @@ export const Hero = () => {
           <div className="relative">
             <Card className="bg-white/10 backdrop-blur-md p-8 shadow-2xl rounded-3xl border border-white/20">
               {/* Mock de chat grupal */}
-              <div className="bg-[#17212b] rounded-2xl overflow-hidden shadow-lg">
+              <div className="bg-slate-950 rounded-2xl overflow-hidden shadow-lg">
                 {/* Header del chat */}
-                <div className="bg-[#232e3c] px-4 py-3 flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-emerald-400 to-cyan-500 flex items-center justify-center">
+                <div className="bg-slate-900 px-4 py-3 flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 flex items-center justify-center">
                     <span className="text-white font-bold">S</span>
                   </div>
                   <div>
                     <div className="text-white font-semibold">Viaje a Córdoba</div>
-                    <div className="text-gray-400 text-sm">SplitBot · WhatsApp</div>
+                    <div className="text-gray-400 text-sm">Splitter · grupo compartido</div>
                   </div>
                 </div>
                 
@@ -101,37 +97,36 @@ export const Hero = () => {
                 <div className="p-4 space-y-3 min-h-[300px]">
                   {/* Mensaje del usuario */}
                   <div className="flex justify-end">
-                    <div className="bg-[#2b5278] text-white px-4 py-2 rounded-2xl rounded-br-md max-w-[80%]">
-                      /nuevo_gasto Cena 15000
+                    <div className="bg-teal-700 text-white px-4 py-2 rounded-2xl rounded-br-md max-w-[80%]">
+                      Cargué la cena · $15.000
                     </div>
                   </div>
                   
                   {/* Respuesta del bot */}
                   <div className="flex justify-start">
-                    <div className="bg-[#182533] text-white px-4 py-3 rounded-2xl rounded-bl-md max-w-[85%]">
+                    <div className="bg-slate-900 text-white px-4 py-3 rounded-2xl rounded-bl-md max-w-[85%]">
                       <div className="text-green-400 mb-1">✅ Gasto registrado</div>
                       <div className="space-y-1 text-sm">
                         <div>📝 <span className="font-semibold">Cena</span></div>
                         <div>💰 Monto: $15,000</div>
                         <div>👤 Pagado por: Juan</div>
-                        <div>🆔 ID: a1b2c3d4</div>
                       </div>
                       <div className="text-gray-400 text-xs mt-2">
-                        Usa /dividir a1b2c3d4 para dividirlo
+                        ¿Lo dividimos entre quienes participaron?
                       </div>
                     </div>
                   </div>
 
                   {/* Otro mensaje */}
                   <div className="flex justify-end">
-                    <div className="bg-[#2b5278] text-white px-4 py-2 rounded-2xl rounded-br-md max-w-[80%]">
-                      /dividir a1b2c3d4
+                    <div className="bg-teal-700 text-white px-4 py-2 rounded-2xl rounded-br-md max-w-[80%]">
+                      Sí, dividir entre todos
                     </div>
                   </div>
 
                   {/* Respuesta división */}
                   <div className="flex justify-start">
-                    <div className="bg-[#182533] text-white px-4 py-3 rounded-2xl rounded-bl-md max-w-[85%]">
+                    <div className="bg-slate-900 text-white px-4 py-3 rounded-2xl rounded-bl-md max-w-[85%]">
                       <div className="mb-2">💰 <span className="font-semibold">Gasto dividido: Cena</span></div>
                       <div className="text-sm space-y-1">
                         <div>📊 Total: $15,000</div>
@@ -142,7 +137,7 @@ export const Hero = () => {
                   </div>
 
                   <div className="flex justify-start">
-                    <div className="bg-[#182533] text-white px-4 py-3 rounded-2xl rounded-bl-md max-w-[85%]">
+                    <div className="bg-slate-900 text-white px-4 py-3 rounded-2xl rounded-bl-md max-w-[85%]">
                       <div className="mb-1 font-semibold">🐀 Recordatorio enviado</div>
                       <div className="text-sm text-emerald-300">A cada deudor por privado</div>
                     </div>

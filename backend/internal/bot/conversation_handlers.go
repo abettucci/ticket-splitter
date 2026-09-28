@@ -133,11 +133,13 @@ func (h *Handler) handleMenuDivide(ctx context.Context, chatID int64, userID ...
 
 	divideOptions := map[int]string{}
 	var rows [][]telegram.InlineKeyboardButton
+	var onlyPendingExpenseID string
 	n := 1
 	for _, exp := range expenses {
 		if !exp.IsDivided {
 			shortID := exp.ID[:8]
 			divideOptions[n] = shortID
+			onlyPendingExpenseID = shortID
 			label := fmt.Sprintf("📝 %s — %s", exp.Description, telegram.FormatMoney(exp.TotalAmount))
 			if len(label) > 60 {
 				label = label[:57] + "..."
@@ -153,7 +155,20 @@ func (h *Handler) handleMenuDivide(ctx context.Context, chatID int64, userID ...
 		return h.tg.SendMessage(ctx, chatID, "✅ Todos los gastos ya fueron divididos.")
 	}
 
-	// Guardar estado para que el usuario pueda responder con número en WhatsApp
+	// WhatsApp no preserva un estado de conversación entre invocaciones de
+	// Lambda. Si sólo queda un gasto pendiente, no le pedimos a la persona un
+	// segundo número: "Dividir gasto" completa la operación en ese momento.
+	// Esto también evita que una respuesta a un menú anterior quede ambigua.
+	if len(divideOptions) == 1 {
+		initiatorID := int64(0)
+		if len(userID) > 0 {
+			initiatorID = userID[0]
+		}
+		return h.handleDivide(ctx, chatID, initiatorID, []string{onlyPendingExpenseID})
+	}
+
+	// Telegram usa botones; WhatsApp puede responder citando esta lista. El
+	// contexto citado se resuelve de forma stateless en handleQuotedMenuChoice.
 	if len(userID) > 0 {
 		h.conv.Set(chatID, userID[0], &ConversationState{
 			Step:          StepSelectDivideExpense,
@@ -571,7 +586,10 @@ func (h *Handler) handleQuotedMenuChoice(ctx context.Context, chatID, userID int
 	selection := strings.TrimSpace(text)
 	quotedLower := strings.ToLower(quotedText)
 
-	if strings.Contains(quotedLower, "¿qué querés hacer?") && strings.Contains(quotedLower, "dividir gasto") {
+	// WhatsApp suele mostrar en la cita solamente la cabecera y "...". La
+	// cabecera es única entre los mensajes del bot, por lo que alcanza para
+	// reconocer el menú principal aunque el preview haya sido truncado.
+	if strings.Contains(quotedLower, "¿qué querés hacer?") {
 		if _, err := strconv.Atoi(selection); err != nil {
 			return false, nil
 		}
