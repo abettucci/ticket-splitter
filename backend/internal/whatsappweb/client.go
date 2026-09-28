@@ -69,10 +69,10 @@ func (c *Client) SendMessageWithOptions(ctx context.Context, req *telegram.SendM
 		return c.SendMessage(ctx, req.ChatID, req.Text)
 	}
 
-	rows := make([]string, 0, 10)
+	rows := make([]string, 0, 14)
 	for _, row := range keyboard.InlineKeyboard {
 		for _, button := range row {
-			if button.CallbackData == "" || len(rows) == 10 {
+			if button.CallbackData == "" || len(rows) == 14 {
 				continue
 			}
 			rows = append(rows, button.Text)

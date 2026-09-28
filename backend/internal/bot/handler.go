@@ -86,6 +86,12 @@ func (h *Handler) HandleUpdate(ctx context.Context, update *telegram.Update) err
 
 	// Procesar comandos
 	text := strings.TrimSpace(msg.Text)
+	// En WhatsApp es natural escribir "@Splitter /pagar ...". Normalizamos
+	// ese formato antes de decidir si se trata de un comando, sin afectar las
+	// menciones que son texto normal.
+	if fields := strings.Fields(text); len(fields) > 1 && strings.HasPrefix(fields[0], "@") && strings.HasPrefix(fields[1], "/") {
+		text = strings.Join(fields[1:], " ")
+	}
 	// In WhatsApp groups, a reply can target an older bot message while a newer
 	// conversation state is still active. The quoted menu is more specific than
 	// that transient state, so resolve it first.
@@ -144,6 +150,10 @@ func (h *Handler) HandleUpdate(ctx context.Context, update *telegram.Update) err
 		return h.handleCreateTestUsers(ctx, chatID, userID, args)
 	case "/limpiar_usuarios_prueba", "/clear_test_users":
 		return h.handleClearTestUsers(ctx, chatID)
+	case "/simular_operaciones", "/simulate_operations":
+		return h.handleRunTestSimulation(ctx, chatID, userID)
+	case "/limpiar_pruebas", "/clear_test_data":
+		return h.handleClearTestData(ctx, chatID, userID)
 	case "/help":
 		return h.handleHelp(ctx, chatID)
 	case "/nuevo_gasto", "/newexpense":
@@ -219,6 +229,8 @@ func (h *Handler) handleInteractiveSelection(ctx context.Context, chatID, userID
 		return h.handleDivide(ctx, chatID, userID, []string{parts[1]})
 	case "redivide":
 		return h.handleRedivide(ctx, chatID, userID, []string{parts[1]})
+	case "pay":
+		return h.handlePayByShortID(ctx, chatID, userID, parts[1])
 	case "conv_payer":
 		return h.handlePayerCallback(ctx, chatID, userID, userName, parts[1], "")
 	default:
@@ -279,6 +291,8 @@ func (h *Handler) handleCallbackQuery(ctx context.Context, query *telegram.Callb
 	case "redivide":
 		_ = h.tg.AnswerCallbackQuery(ctx, query.ID, "Redividiendo...")
 		return h.handleRedivide(ctx, chatID, userID, []string{shortID})
+	case "pay":
+		return h.handlePayByShortID(ctx, chatID, userID, shortID)
 	case "conv_payer":
 		return h.handlePayerCallback(ctx, chatID, userID, displayName, shortID, query.ID)
 	default:
@@ -370,7 +384,9 @@ func (h *Handler) handleStart(ctx context.Context, chatID, userID int64, userNam
 
 // handleHelp maneja el comando /help
 func (h *Handler) handleHelp(ctx context.Context, chatID int64) error {
-	message := `🤖 <b>Comandos de SplitBot</b>
+	message := `🤖 <b>Guía de Splitter</b>
+
+Para lo cotidiano, elegí una opción del menú o escribí lo que necesitás. Los atajos con “/” quedan como referencia avanzada.
 
 📝 <b>Gestión de Gastos</b>
 • /nuevo_gasto [desc] [monto] [usuario] - Crear gasto
@@ -412,10 +428,9 @@ func (h *Handler) handleHelp(ctx context.Context, chatID int64) error {
   <i>En WhatsApp, cada deudor debe haber enviado /start por chat privado.</i>
 
 🧪 <b>Testing</b>
-• /crear_usuarios_prueba [nombre1] [nombre2]... - Crear usuarios personalizados
-  <i>Ej: /crear_usuarios_prueba Juan María Pedro</i>
-• /crear_usuarios_prueba default - Crear 5 usuarios por defecto
-• /limpiar_usuarios_prueba - Eliminar todos los usuarios de prueba
+• Crear personas de prueba - Agrega 5 personas ficticias al grupo
+• Simular operaciones - Genera gastos, divisiones, pagos y cambios de pagador, y valida los cálculos
+• Limpiar datos de prueba - Borra sólo la simulación y esas personas ficticias
 
 ℹ️ <b>Info</b>
 • /start - Bienvenida
@@ -662,7 +677,7 @@ Tip: Usa /ver_gastos para ver los IDs de los gastos.`)
 		sb.WriteString(fmt.Sprintf("• %s: %s\n", member.DisplayName, status))
 	}
 
-	sb.WriteString(fmt.Sprintf("\n_Usa /pagar %s para marcar tu pago_", shortID))
+	sb.WriteString("\n💸 Cada persona puede elegir «Pagar una deuda» en el menú para marcar su parte.")
 
 	h.logChangelog(chatID, userID, "", "expense", shortID, expense.Description, "divided", map[string]string{
 		"participantes": fmt.Sprintf("%d", len(members)),
@@ -722,7 +737,7 @@ func (h *Handler) handleMyDebts(ctx context.Context, chatID, userID int64) error
 	}
 
 	sb.WriteString(fmt.Sprintf("\n💰 <b>Total adeudado: %s</b>", telegram.FormatMoney(total)))
-	sb.WriteString("\n\n_Usa /pagar [id] para marcar como pagado_")
+	sb.WriteString("\n\n💸 Elegí «Pagar una deuda» en el menú para marcar una como pagada.")
 
 	return h.tg.SendMessage(ctx, chatID, sb.String())
 }
@@ -730,27 +745,9 @@ func (h *Handler) handleMyDebts(ctx context.Context, chatID, userID int64) error
 // handlePay maneja el comando /pagar
 func (h *Handler) handlePay(ctx context.Context, chatID, userID int64, args []string) error {
 	if len(args) < 1 {
-		return h.tg.SendMessage(ctx, chatID, "❌ Uso: /pagar [id_gasto]\n\nEjemplo: /pagar a1b2c3")
+		return h.handleMenuPay(ctx, chatID, userID)
 	}
-
-	shortID := args[0]
-
-	// Buscar el gasto
-	expense, err := h.db.GetExpenseByShortID(ctx, chatID, shortID)
-	if err != nil {
-		return h.tg.SendMessage(ctx, chatID, "❌ Gasto no encontrado.")
-	}
-
-	// Marcar como pagado
-	err = h.db.MarkSplitAsPaid(ctx, expense.ID, userID)
-	if err != nil {
-		h.logger.Printf("Error marking split as paid: %v", err)
-		return h.tg.SendMessage(ctx, chatID, "❌ Error al marcar el pago. ¿Ya estaba pagado?")
-	}
-
-	h.logChangelog(chatID, userID, "", "expense", shortID, expense.Description, "paid", nil)
-
-	return h.tg.SendMessage(ctx, chatID, fmt.Sprintf("✅ ¡Pago registrado!\n\nTu parte del gasto <b>%s</b> ha sido marcada como pagada.", expense.Description))
+	return h.handlePayByShortID(ctx, chatID, userID, strings.TrimSpace(args[0]))
 }
 
 // handleMembers maneja el comando /miembros
@@ -911,14 +908,8 @@ func (h *Handler) handleCreateTestUsers(ctx context.Context, chatID, userID int6
 	}
 
 	if len(createdUsernames) > 0 {
-		sb.WriteString("\n<i>Ahora puedes usar estos usuarios en comandos:</i>\n")
-		sb.WriteString(fmt.Sprintf("• /nuevo_gasto Cena 15000 @%s\n", createdUsernames[0]))
-		if len(createdUsernames) > 1 {
-			sb.WriteString(fmt.Sprintf("• /dividir_select [id] @%s @%s\n", createdUsernames[0], createdUsernames[1]))
-		}
-		if len(createdUsernames) > 2 {
-			sb.WriteString(fmt.Sprintf("• /dividir_custom [id] @%s 5000 @%s 10000\n", createdUsernames[0], createdUsernames[1]))
-		}
+		sb.WriteString("\n🧪 Son personas ficticias: no reciben WhatsApp ni recordatorios.\n")
+		sb.WriteString("Elegí «Simular operaciones» para generar y validar una prueba completa, o «Limpiar datos de prueba» cuando termines.")
 	}
 
 	return h.tg.SendMessage(ctx, chatID, sb.String())
@@ -966,50 +957,12 @@ func normalizeUsername(name string) string {
 
 // handleClearTestUsers elimina los usuarios de prueba
 func (h *Handler) handleClearTestUsers(ctx context.Context, chatID int64) error {
-	// Eliminar usuarios de prueba del rango 999000001 a 999000050
-	// (suficiente para cubrir cualquier cantidad creada con /crear_usuarios_prueba)
-	deletedCount := 0
-	var deletedNames []string
-
-	for i := 1; i <= 50; i++ {
-		testUserID := int64(999000000 + i)
-
-		// Obtener información del miembro antes de eliminarlo (para mostrar el nombre)
-		members, err := h.db.GetGroupMembers(ctx, chatID)
-		if err == nil {
-			for _, member := range members {
-				if member.UserID == testUserID {
-					deletedNames = append(deletedNames, member.DisplayName)
-					break
-				}
-			}
-		}
-
-		err = h.db.RemoveMember(ctx, chatID, testUserID)
-		if err == nil {
-			deletedCount++
-		}
+	deletedNames, err := h.clearTestPeople(ctx, chatID)
+	if err != nil {
+		h.logger.Printf("Error clearing test users: %v", err)
+		return h.tg.SendMessage(ctx, chatID, "❌ No pude eliminar las personas de prueba.")
 	}
-
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("🗑️ <b>Usuarios de prueba eliminados:</b> %d\n\n", deletedCount))
-
-	if len(deletedNames) > 0 {
-		sb.WriteString("<b>Usuarios eliminados:</b>\n")
-		for i, name := range deletedNames {
-			if i < 10 { // Mostrar máximo 10
-				sb.WriteString(fmt.Sprintf("• %s\n", telegram.EscapeHTML(name)))
-			}
-		}
-		if len(deletedNames) > 10 {
-			sb.WriteString(fmt.Sprintf("• ... y %d más\n", len(deletedNames)-10))
-		}
-		sb.WriteString("\n")
-	}
-
-	sb.WriteString("Usa /miembros para verificar.")
-
-	return h.tg.SendMessage(ctx, chatID, sb.String())
+	return h.tg.SendMessage(ctx, chatID, fmt.Sprintf("🗑️ <b>Personas de prueba desactivadas:</b> %d\n\nUsá «Miembros» para verificar.", len(deletedNames)))
 }
 
 // handleBalance maneja el comando /balance

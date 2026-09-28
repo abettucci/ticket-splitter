@@ -39,6 +39,16 @@ func (h *Handler) handleMenu(ctx context.Context, chatID int64, userID ...int64)
 				{Text: "👥 Miembros", CallbackData: "menu:miembros"},
 				{Text: "❓ Ayuda", CallbackData: "menu:ayuda"},
 			},
+			{
+				{Text: "💸 Pagar una deuda", CallbackData: "menu:pagar_deuda"},
+			},
+			{
+				{Text: "🧪 Crear personas de prueba", CallbackData: "menu:crear_prueba"},
+				{Text: "🎲 Simular operaciones", CallbackData: "menu:simular_prueba"},
+			},
+			{
+				{Text: "🧹 Limpiar datos de prueba", CallbackData: "menu:limpiar_prueba"},
+			},
 		},
 	}
 
@@ -75,6 +85,14 @@ func (h *Handler) handleMenuCallback(ctx context.Context, chatID, userID int64, 
 		return h.handleMembers(ctx, chatID)
 	case "ayuda":
 		return h.handleHelp(ctx, chatID)
+	case "pagar_deuda":
+		return h.handleMenuPay(ctx, chatID, userID)
+	case "crear_prueba":
+		return h.handleCreateTestUsers(ctx, chatID, userID, []string{"default"})
+	case "simular_prueba":
+		return h.handleRunTestSimulation(ctx, chatID, userID)
+	case "limpiar_prueba":
+		return h.handleClearTestData(ctx, chatID, userID)
 	default:
 		return nil
 	}
@@ -288,6 +306,12 @@ func (h *Handler) handleConversationStep(ctx context.Context, chatID, userID int
 			return h.tg.SendMessage(ctx, chatID, fmt.Sprintf("❌ Opción %d no válida. Pedí «redividir» para ver la lista de nuevo.", n))
 		}
 		return h.handleRedivide(ctx, chatID, userID, []string{strings.TrimSpace(text)})
+
+	case StepSelectPaymentExpense:
+		if n, err := strconv.Atoi(strings.TrimSpace(text)); err == nil {
+			return h.handlePaymentChoice(ctx, chatID, userID, n)
+		}
+		return h.tg.SendMessage(ctx, chatID, "❌ Respondé con el número de una deuda de la lista.")
 	}
 	return nil
 }
@@ -495,6 +519,10 @@ func (h *Handler) handleNaturalLanguage(ctx context.Context, chatID, userID int6
 			action:   func() error { return h.handleMyDebts(ctx, chatID, userID) },
 		},
 		{
+			keywords: []string{"pagar una deuda", "marcar pago", "marcar como pagado", "ya pagué", "ya pague", "pagué", "pague", "pagar deuda"},
+			action:   func() error { return h.handleMenuPay(ctx, chatID, userID) },
+		},
+		{
 			keywords: []string{"balance", "estado de cuentas", "cómo estamos", "como estamos", "resumen"},
 			action:   func() error { return h.handleBalance(ctx, chatID) },
 		},
@@ -572,6 +600,14 @@ func (h *Handler) handleMenuNumber(ctx context.Context, chatID, userID int64, te
 		return true, h.handleMembers(ctx, chatID)
 	case "10":
 		return true, h.handleHelp(ctx, chatID)
+	case "11":
+		return true, h.handleMenuPay(ctx, chatID, userID)
+	case "12":
+		return true, h.handleCreateTestUsers(ctx, chatID, userID, []string{"default"})
+	case "13":
+		return true, h.handleRunTestSimulation(ctx, chatID, userID)
+	case "14":
+		return true, h.handleClearTestData(ctx, chatID, userID)
 	default:
 		return false, nil
 	}
@@ -619,6 +655,14 @@ func (h *Handler) handleQuotedMenuChoice(ctx context.Context, chatID, userID int
 			}
 		}
 		return true, h.tg.SendMessage(ctx, chatID, fmt.Sprintf("❌ Opción %d no válida. Respondé con un gasto de la lista citada.", n))
+	}
+
+	if strings.Contains(quotedLower, "¿qué deuda querés marcar como pagada?") {
+		n, err := strconv.Atoi(selection)
+		if err != nil || n < 1 {
+			return false, nil
+		}
+		return true, h.handlePaymentChoice(ctx, chatID, userID, n)
 	}
 
 	if strings.Contains(quotedLower, "gasto registrado") && strings.Contains(quotedLower, "dividir entre todos") {

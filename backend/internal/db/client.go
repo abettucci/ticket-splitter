@@ -873,10 +873,14 @@ func (c *Client) MarkSplitAsPaid(ctx context.Context, expenseID string, userID i
 			"PK": &types.AttributeValueMemberS{Value: pk},
 			"SK": &types.AttributeValueMemberS{Value: sk},
 		},
-		UpdateExpression: aws.String("SET is_paid = :paid, paid_at = :now"),
+		// Never create a split while trying to pay it. A conditional update also
+		// prevents a payer from marking an already-paid or unrelated split.
+		ConditionExpression: aws.String("attribute_exists(PK) AND attribute_exists(SK) AND is_paid = :unpaid"),
+		UpdateExpression:    aws.String("SET is_paid = :paid, paid_at = :now"),
 		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":paid": &types.AttributeValueMemberBOOL{Value: true},
-			":now":  &types.AttributeValueMemberS{Value: time.Now().Format(time.RFC3339)},
+			":paid":   &types.AttributeValueMemberBOOL{Value: true},
+			":unpaid": &types.AttributeValueMemberBOOL{Value: false},
+			":now":    &types.AttributeValueMemberS{Value: time.Now().Format(time.RFC3339)},
 		},
 	})
 
