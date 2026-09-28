@@ -60,6 +60,10 @@ let linkingPaused = false;
 // (`@lid`). Persist the real JID on the Railway volume so direct debt
 // reminders still work after a sidecar restart.
 const inboundChatJIDs = loadInboundChatJIDs();
+// Map outgoing bot message IDs to their full text. WhatsApp replies often
+// expose only a short preview of the quoted message, so this lets the backend
+// resolve the exact menu that a person selected.
+const outboundMenuContexts = new Map();
 
 client.on('qr', (qr) => {
   linkingPaused = false;
@@ -239,7 +243,8 @@ app.post('/send', async (req, res) => {
 
   try {
     const sanitized = stripHtmlForWhatsApp(String(text));
-    await client.sendMessage(jid, sanitized);
+    const sentMessage = await client.sendMessage(jid, sanitized);
+    rememberOutboundMenuContext(sentMessage, sanitized);
     res.json({ ok: true });
   } catch (e) {
     console.error('Send failed:', e);
@@ -309,18 +314,66 @@ async function getBotReplyContext(msg) {
   try {
     const quoted = await msg.getQuotedMessage();
     const isReplyToClient = sameWhatsAppIdentity(quoted?.author || quoted?.from, ownJid);
+    const savedContext = findOutboundMenuContext(msg, quoted);
+    const quotedText = savedContext || String(quoted?.body || '');
+    console.log('Quoted message context:', {
+      saved: Boolean(savedContext),
+      quotedTextLength: quotedText.length,
+      botReply: isReplyToClient,
+    });
     return {
-      isReplyToClient,
+      isReplyToClient: isReplyToClient || Boolean(savedContext),
       // Some group replies expose the quoted author as the group JID, so the
       // identity check above can be inconclusive. Forward the quoted body in
       // either case; the Go backend only recognizes its own fixed menu text
       // before it performs an action.
-      quotedText: String(quoted?.body || ''),
+      quotedText,
     };
   } catch (error) {
     console.warn('Could not resolve quoted message:', error.message);
     return { isReplyToClient: false, quotedText: '' };
   }
+}
+
+function rememberOutboundMenuContext(message, text) {
+  if (!isBotMenu(text)) return;
+
+  for (const id of messageIDCandidates(message)) {
+    outboundMenuContexts.set(id, { text, storedAt: Date.now() });
+  }
+
+  // Keep the sidecar bounded during a long-running Railway deployment.
+  const oldestAllowed = Date.now() - (24 * 60 * 60 * 1000);
+  for (const [id, context] of outboundMenuContexts) {
+    if (context.storedAt < oldestAllowed) outboundMenuContexts.delete(id);
+  }
+}
+
+function findOutboundMenuContext(inboundMessage, quotedMessage) {
+  const candidates = [
+    inboundMessage?._data?.quotedStanzaID,
+    inboundMessage?._data?.quotedMsgId,
+    ...messageIDCandidates(quotedMessage),
+  ].filter((id) => typeof id === 'string' && id.length > 0);
+
+  for (const id of candidates) {
+    const context = outboundMenuContexts.get(id);
+    if (context) return context.text;
+  }
+  return '';
+}
+
+function messageIDCandidates(message) {
+  const serialized = message?.id?._serialized;
+  const stanzaID = message?.id?.id;
+  return [serialized, stanzaID].filter((id) => typeof id === 'string' && id.length > 0);
+}
+
+function isBotMenu(text) {
+  const normalized = String(text || '').toLowerCase();
+  return normalized.includes('¿qué querés hacer?')
+    || normalized.includes('¿qué gasto querés dividir?')
+    || (normalized.includes('gasto registrado') && normalized.includes('dividir entre todos'));
 }
 
 function sameWhatsAppIdentity(left, right) {
