@@ -78,6 +78,37 @@ func TestExpenseListSummaryUnderstandsPayerAndDebtorWording(t *testing.T) {
 	assertSummaryAmount(t, summary.balances["member:2"], -8000)
 }
 
+func TestExpenseListSummaryUnderstandsBareAmountsSectionsAndShortInstallments(t *testing.T) {
+	summary := summarizeExpenseList(`Desde 30-9
+Consumos
+Dietética 5.700
+Nafta 39.000
+Dexter 1 de 6 50.000
+Bronceador 2 de 6 12.000
+Seguro KA 159.200
+
+Reintegros
+Dietética 1.700
+Nafta 8.700
+Dexter 75.000`, nil)
+
+	assertSummaryAmount(t, summary.expenses, 265900)
+	assertSummaryAmount(t, summary.reimbursements, 85400)
+	assertSummaryAmount(t, summary.expenses-summary.reimbursements, 180500)
+	if summary.skippedLines != 1 { // "Desde 30-9" is intentionally not a monetary line.
+		t.Fatalf("got %d skipped lines, want 1", summary.skippedLines)
+	}
+	if len(summary.entries) != 8 {
+		t.Fatalf("got %d interpreted entries, want 8", len(summary.entries))
+	}
+	if got := summary.entries[2].installment; got == nil || got.current != 1 || got.count != 6 || got.monthly != 50000 {
+		t.Fatalf("short installment 1 de 6 parsed incorrectly: %#v", got)
+	}
+	if got := summary.entries[3].installment; got == nil || got.current != 2 || got.count != 6 || got.monthly != 12000 {
+		t.Fatalf("short installment 2 de 6 parsed incorrectly: %#v", got)
+	}
+}
+
 func assertSummaryAmount(t *testing.T, got, want float64) {
 	t.Helper()
 	if math.Abs(got-want) > 0.01 {

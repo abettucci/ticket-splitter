@@ -18,9 +18,11 @@ const maxExpenseSummaryCharacters = 6000
 
 var (
 	summaryCurrencyAmountPattern = regexp.MustCompile(`(?i)(?:\$|ars\s*)([0-9][0-9., ]*)`)
-	summaryContextAmountPattern  = regexp.MustCompile(`(?i)\b(?:de|por|pago|pagado|debe|reintegro|reembolso|descuento|bonificacion|cuotas?\s+de)\s+([0-9][0-9., ]*)`)
+	summaryContextAmountPattern  = regexp.MustCompile(`(?i)\b(?:por|pago|pagado|debe|reintegro|reembolso|descuento|bonificacion|monto|importe|total|cuotas?\s+de)\s+([0-9][0-9., ]*)`)
+	summaryTrailingAmountPattern = regexp.MustCompile(`(?:^|\s)([0-9][0-9.,]*)\s*$`)
 	summaryInstallmentPattern    = regexp.MustCompile(`(?i)\b([2-9]|[1-9][0-9]+)\s+cuotas?\s+de\s+(?:\$|ars\s*)?([0-9][0-9., ]*)`)
 	summaryCurrentInstallment    = regexp.MustCompile(`(?i)\bcuota\s+([1-9][0-9]*)\s*/\s*([2-9]|[1-9][0-9]+)(?:\s+de)?\s+(?:\$|ars\s*)?([0-9][0-9., ]*)`)
+	summaryShortInstallment      = regexp.MustCompile(`(?i)\b([1-9][0-9]*)\s+de\s+([2-9]|[1-9][0-9]+)\s+(?:\$|ars\s*)?([0-9][0-9., ]*)`)
 	summaryInstallmentCount      = regexp.MustCompile(`(?i)\b(?:en\s+)?([2-9]|[1-9][0-9]+)\s+cuotas?\b`)
 	summaryMentionPattern        = regexp.MustCompile(`@[a-z0-9_]+`)
 )
@@ -146,9 +148,14 @@ func summarizeExpenseList(input string, parties []summaryParty) expenseListSumma
 	}
 
 	unknownHandles := make(map[string]struct{})
+	sectionIsReimbursement := false
 	for _, rawLine := range strings.Split(input, "\n") {
 		line := strings.TrimSpace(strings.TrimLeft(rawLine, "-•* \t"))
 		if line == "" {
+			continue
+		}
+		if isReimbursement, isSectionHeader := summarySectionHeader(normalizeSummaryText(line)); isSectionHeader {
+			sectionIsReimbursement = isReimbursement
 			continue
 		}
 
@@ -157,6 +164,7 @@ func summarizeExpenseList(input string, parties []summaryParty) expenseListSumma
 			result.skippedLines++
 			continue
 		}
+		entry.reimbursement = entry.reimbursement || sectionIsReimbursement
 		result.entries = append(result.entries, entry)
 		if entry.reimbursement {
 			result.reimbursements += entry.amount
@@ -226,6 +234,7 @@ func findSummaryMoneyTokens(line string) []summaryMoneyToken {
 	}
 	addMatches(summaryCurrencyAmountPattern)
 	addMatches(summaryContextAmountPattern)
+	addMatches(summaryTrailingAmountPattern)
 	sort.Slice(tokens, func(i, j int) bool { return tokens[i].start < tokens[j].start })
 	return tokens
 }
@@ -276,6 +285,25 @@ func parseSummaryAmount(raw string) (float64, bool) {
 
 func parseSummaryInstallment(line string, tokens []summaryMoneyToken) (summaryInstallment, bool) {
 	if match := summaryCurrentInstallment.FindStringSubmatch(line); len(match) == 4 {
+		current, _ := strconv.Atoi(match[1])
+		count, _ := strconv.Atoi(match[2])
+		monthly, ok := parseSummaryAmount(match[3])
+		if ok && current <= count {
+			return summaryInstallment{
+				count:         count,
+				current:       current,
+				monthly:       monthly,
+				planTotal:     monthly * float64(count),
+				remaining:     monthly * float64(count-current),
+				currentCharge: true,
+			}, true
+		}
+	}
+
+	// Many card statements omit the word "cuota" and write "1 de 6
+	// 50.000". This is a current charge, not six times the amount in the
+	// current list; the complete plan is shown separately for context.
+	if match := summaryShortInstallment.FindStringSubmatch(line); len(match) == 4 {
 		current, _ := strconv.Atoi(match[1])
 		count, _ := strconv.Atoi(match[2])
 		monthly, ok := parseSummaryAmount(match[3])
@@ -495,6 +523,20 @@ func isSummaryReimbursement(line string) bool {
 		}
 	}
 	return false
+}
+
+// summarySectionHeader recognizes spreadsheet-like pasted lists. A heading is
+// not an expense itself; it controls how the following amount lines are read.
+func summarySectionHeader(line string) (isReimbursement bool, ok bool) {
+	line = strings.Trim(strings.TrimSpace(line), ":-–—")
+	switch line {
+	case "consumos", "gastos", "compras", "egresos":
+		return false, true
+	case "reintegros", "reembolsos", "devoluciones", "descuentos", "cashback", "bonificaciones":
+		return true, true
+	default:
+		return false, false
+	}
 }
 
 func formatExpenseListSummary(summary expenseListSummary) string {
