@@ -19,6 +19,7 @@ const (
 	StepSelectDivideExpense    // selección de gasto a dividir (para WhatsApp sin botones)
 	StepSelectRedivideExpense  // selección de gasto a redividir (para WhatsApp sin botones)
 	StepSelectPaymentExpense   // selección de una deuda propia para marcar como pagada
+	StepExpenseSummary         // espera una lista libre de gastos/reintegros para resumirla sin guardarla
 )
 
 // ConversationState guarda el estado de una conversación en curso para un usuario

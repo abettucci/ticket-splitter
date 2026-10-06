@@ -25,6 +25,11 @@ type Client struct {
 	chatTypes    sync.Map // map[int64]string; response route learned from inbound WhatsApp messages
 }
 
+// Text menus are the WhatsApp Web fallback for Telegram inline keyboards.
+// Keep enough room for the complete main menu (including the expense-list
+// summary) while still keeping replies comfortably scannable in chat.
+const maxWhatsAppTextMenuOptions = 16
+
 // NewClient crea un cliente que postea outbound al sidecar.
 // Si las env vars no están seteadas, el cliente igual se construye pero los Send fallarán.
 func NewClient() *Client {
@@ -69,10 +74,10 @@ func (c *Client) SendMessageWithOptions(ctx context.Context, req *telegram.SendM
 		return c.SendMessage(ctx, req.ChatID, req.Text)
 	}
 
-	rows := make([]string, 0, 14)
+	rows := make([]string, 0, maxWhatsAppTextMenuOptions)
 	for _, row := range keyboard.InlineKeyboard {
 		for _, button := range row {
-			if button.CallbackData == "" || len(rows) == 14 {
+			if button.CallbackData == "" || len(rows) == maxWhatsAppTextMenuOptions {
 				continue
 			}
 			rows = append(rows, button.Text)

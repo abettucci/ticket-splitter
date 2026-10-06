@@ -49,6 +49,9 @@ func (h *Handler) handleMenu(ctx context.Context, chatID int64, userID ...int64)
 			{
 				{Text: "🧹 Limpiar datos de prueba", CallbackData: "menu:limpiar_prueba"},
 			},
+			{
+				{Text: "🧾 Resumir una lista", CallbackData: "menu:resumir_lista"},
+			},
 		},
 	}
 
@@ -93,6 +96,8 @@ func (h *Handler) handleMenuCallback(ctx context.Context, chatID, userID int64, 
 		return h.handleRunTestSimulation(ctx, chatID, userID)
 	case "limpiar_prueba":
 		return h.handleClearTestData(ctx, chatID, userID)
+	case "resumir_lista":
+		return h.startExpenseSummary(ctx, chatID, userID)
 	default:
 		return nil
 	}
@@ -312,6 +317,10 @@ func (h *Handler) handleConversationStep(ctx context.Context, chatID, userID int
 			return h.handlePaymentChoice(ctx, chatID, userID, n)
 		}
 		return h.tg.SendMessage(ctx, chatID, "❌ Respondé con el número de una deuda de la lista.")
+
+	case StepExpenseSummary:
+		h.conv.Clear(chatID, userID)
+		return h.handleExpenseSummary(ctx, chatID, userID, userName, text)
 	}
 	return nil
 }
@@ -503,6 +512,10 @@ func (h *Handler) handleNaturalLanguage(ctx context.Context, chatID, userID int6
 
 	triggers := []trigger{
 		{
+			keywords: []string{"resumir gastos", "resumir una lista", "resumen de gastos", "resumen de la lista", "sumar gastos y reintegros", "sumar gastos", "calcular reintegros", "resumen con reintegros"},
+			action:   func() error { return h.startExpenseSummary(ctx, chatID, userID) },
+		},
+		{
 			keywords: []string{"hola", "holi", "buenas", "buenos dias", "buenos días", "buen dia", "buen día"},
 			action:   func() error { return h.handleMenu(ctx, chatID, userID) },
 		},
@@ -608,6 +621,8 @@ func (h *Handler) handleMenuNumber(ctx context.Context, chatID, userID int64, te
 		return true, h.handleRunTestSimulation(ctx, chatID, userID)
 	case "14":
 		return true, h.handleClearTestData(ctx, chatID, userID)
+	case "15":
+		return true, h.startExpenseSummary(ctx, chatID, userID)
 	default:
 		return false, nil
 	}

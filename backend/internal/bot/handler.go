@@ -154,6 +154,11 @@ func (h *Handler) HandleUpdate(ctx context.Context, update *telegram.Update) err
 		return h.handleRunTestSimulation(ctx, chatID, userID)
 	case "/limpiar_pruebas", "/clear_test_data":
 		return h.handleClearTestData(ctx, chatID, userID)
+	case "/resumir_gastos", "/resumen_gastos", "/resumir_lista":
+		if len(args) == 0 {
+			return h.startExpenseSummary(ctx, chatID, userID)
+		}
+		return h.handleExpenseSummary(ctx, chatID, userID, displayName, strings.Join(args, " "))
 	case "/help":
 		return h.handleHelp(ctx, chatID)
 	case "/nuevo_gasto", "/newexpense":
@@ -431,6 +436,10 @@ Para lo cotidiano, elegí una opción del menú o escribí lo que necesitás. Lo
 • Crear personas de prueba - Agrega 5 personas ficticias al grupo
 • Simular operaciones - Genera gastos, divisiones, pagos y cambios de pagador, y valida los cálculos
 • Limpiar datos de prueba - Borra sólo la simulación y esas personas ficticias
+
+🧾 <b>Resumir una lista</b>
+• /resumir_gastos - Suma gastos, descuenta reintegros e interpreta cuotas y personas mencionadas
+  <i>Ejemplo: Juan pagó cena $24000. Ana debe $12000 y Pedro debe $12000.</i>
 
 ℹ️ <b>Info</b>
 • /start - Bienvenida
