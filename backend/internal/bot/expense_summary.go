@@ -25,6 +25,7 @@ var (
 	summaryShortInstallment      = regexp.MustCompile(`(?i)\b([1-9][0-9]*)\s+de\s+([2-9]|[1-9][0-9]+)\s+(?:\$|ars\s*)?([0-9][0-9., ]*)`)
 	summaryInstallmentCount      = regexp.MustCompile(`(?i)\b(?:en\s+)?([2-9]|[1-9][0-9]+)\s+cuotas?\b`)
 	summaryMentionPattern        = regexp.MustCompile(`@[a-z0-9_]+`)
+	summaryMetadataPattern       = regexp.MustCompile(`(?i)^(desde|hasta|periodo|período|fecha|mes)\b`)
 )
 
 type summaryMoneyToken struct {
@@ -154,8 +155,12 @@ func summarizeExpenseList(input string, parties []summaryParty) expenseListSumma
 		if line == "" {
 			continue
 		}
-		if isReimbursement, isSectionHeader := summarySectionHeader(normalizeSummaryText(line)); isSectionHeader {
+		normalized := normalizeSummaryText(line)
+		if isReimbursement, isSectionHeader := summarySectionHeader(normalized); isSectionHeader {
 			sectionIsReimbursement = isReimbursement
+			continue
+		}
+		if summaryMetadataPattern.MatchString(normalized) {
 			continue
 		}
 
@@ -172,7 +177,6 @@ func summarizeExpenseList(input string, parties []summaryParty) expenseListSumma
 			result.expenses += entry.amount
 		}
 
-		normalized := normalizeSummaryText(line)
 		mentioned := mentionedSummaryParties(normalized, parties)
 		for _, handle := range summaryMentionPattern.FindAllString(normalized, -1) {
 			if !hasSummaryAlias(handle, parties) {
@@ -528,7 +532,10 @@ func isSummaryReimbursement(line string) bool {
 // summarySectionHeader recognizes spreadsheet-like pasted lists. A heading is
 // not an expense itself; it controls how the following amount lines are read.
 func summarySectionHeader(line string) (isReimbursement bool, ok bool) {
-	line = strings.Trim(strings.TrimSpace(line), ":-–—")
+	// WhatsApp preserves Markdown emphasis markers in the inbound text, so a
+	// pasted heading such as *Reintegros* must be treated exactly as
+	// Reintegros.
+	line = strings.Trim(strings.TrimSpace(line), ":-–—*_`~ ")
 	switch line {
 	case "consumos", "gastos", "compras", "egresos":
 		return false, true

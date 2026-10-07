@@ -80,14 +80,14 @@ func TestExpenseListSummaryUnderstandsPayerAndDebtorWording(t *testing.T) {
 
 func TestExpenseListSummaryUnderstandsBareAmountsSectionsAndShortInstallments(t *testing.T) {
 	summary := summarizeExpenseList(`Desde 30-9
-Consumos
+*Consumos*
 Dietética 5.700
 Nafta 39.000
 Dexter 1 de 6 50.000
 Bronceador 2 de 6 12.000
 Seguro KA 159.200
 
-Reintegros
+*Reintegros*
 Dietética 1.700
 Nafta 8.700
 Dexter 75.000`, nil)
@@ -95,8 +95,8 @@ Dexter 75.000`, nil)
 	assertSummaryAmount(t, summary.expenses, 265900)
 	assertSummaryAmount(t, summary.reimbursements, 85400)
 	assertSummaryAmount(t, summary.expenses-summary.reimbursements, 180500)
-	if summary.skippedLines != 1 { // "Desde 30-9" is intentionally not a monetary line.
-		t.Fatalf("got %d skipped lines, want 1", summary.skippedLines)
+	if summary.skippedLines != 0 { // Date and Markdown headings are metadata, not malformed expenses.
+		t.Fatalf("got %d skipped lines, want 0", summary.skippedLines)
 	}
 	if len(summary.entries) != 8 {
 		t.Fatalf("got %d interpreted entries, want 8", len(summary.entries))
