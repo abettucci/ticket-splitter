@@ -5,7 +5,7 @@ import path from 'node:path';
 import QRCode from 'qrcode';
 import pkg from 'whatsapp-web.js';
 
-const { Client, LocalAuth } = pkg;
+const { Client, LocalAuth, Buttons } = pkg;
 
 const PORT = Number(process.env.PORT || 3000);
 const SHARED_SECRET = process.env.SHARED_SECRET;
@@ -15,6 +15,10 @@ const INBOUND_PATH = process.env.INBOUND_PATH || '/wa-web/inbound';
 // Group expense splitting is enabled by default. Set ALLOW_GROUPS=false only to
 // temporarily pause group traffic without unlinking the WhatsApp account.
 const ALLOW_GROUPS = String(process.env.ALLOW_GROUPS || 'true').toLowerCase() === 'true';
+// whatsapp-web.js interactive messages are deprecated by WhatsApp Web and may
+// stop working at any time. Enable this only to test native-looking buttons;
+// every failed attempt falls back to the numbered text menu automatically.
+const ENABLE_INTERACTIVE_MENUS = String(process.env.WAWEB_INTERACTIVE_MENUS || 'false').toLowerCase() === 'true';
 const QR_MAX_RETRIES = Math.max(1, Number.parseInt(process.env.QR_MAX_RETRIES || '1', 10) || 1);
 const INBOUND_CHAT_JIDS_PATH = path.join(SESSION_PATH, 'inbound-chat-jids.json');
 
@@ -232,7 +236,7 @@ app.post('/send', async (req, res) => {
     return res.status(503).json({ ok: false, error: 'client not ready' });
   }
 
-  const { chat_id, chat_type, text } = req.body || {};
+  const { chat_id, chat_type, text, interactive } = req.body || {};
   if (!chat_id || !text) {
     return res.status(400).json({ ok: false, error: 'missing chat_id or text' });
   }
@@ -243,14 +247,54 @@ app.post('/send', async (req, res) => {
 
   try {
     const sanitized = stripHtmlForWhatsApp(String(text));
-    const sentMessage = await client.sendMessage(jid, sanitized);
+    const result = await sendBotMessage(jid, sanitized, interactive);
+    const sentMessage = result.sentMessage;
     rememberOutboundMenuContext(sentMessage, sanitized);
-    res.json({ ok: true });
+    res.json({ ok: true, interactive: result.interactive, fallback: result.fallback });
   } catch (e) {
     console.error('Send failed:', e);
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
+async function sendBotMessage(jid, text, interactive) {
+  const buttons = interactiveButtons(interactive);
+  if (!ENABLE_INTERACTIVE_MENUS || !buttons) {
+    return { sentMessage: await client.sendMessage(jid, text), interactive: false, fallback: false };
+  }
+
+  try {
+    if (typeof Buttons !== 'function') {
+      throw new Error('Buttons constructor is unavailable in this whatsapp-web.js build');
+    }
+    const interactiveMessage = new Buttons(text, buttons, '', '');
+    const sentMessage = await client.sendMessage(jid, interactiveMessage);
+    console.log('Sent experimental WhatsApp buttons:', { kind: interactive.kind, count: buttons.length });
+    return { sentMessage, interactive: true, fallback: false };
+  } catch (error) {
+    console.warn('Interactive menu failed; sending numbered fallback:', error.message);
+    return { sentMessage: await client.sendMessage(jid, text), interactive: false, fallback: true };
+  }
+}
+
+function interactiveButtons(interactive) {
+  if (!interactive || !Array.isArray(interactive.options)) return null;
+
+  let options = interactive.options;
+  if (interactive.kind === 'main_menu' && options.length > 3) {
+    options = [
+      options[0],
+      options[1],
+      { id: 'menu:mas_opciones', title: '➡️ Más opciones' },
+    ];
+  }
+  if (options.length === 0 || options.length > 3) return null;
+
+  return options.map((option) => ({
+    id: String(option.id || ''),
+    body: String(option.title || '').slice(0, 20),
+  })).filter((option) => option.id && option.body);
+}
 
 function stripHtmlForWhatsApp(text) {
   return text

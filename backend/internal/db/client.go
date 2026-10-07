@@ -272,6 +272,31 @@ func (c *Client) GetOrCreateGroup(ctx context.Context, chatID int64, title, chat
 	return group, nil
 }
 
+// GetGroup returns the already-known chat metadata without creating or
+// mutating a group. It is used by private chat views to distinguish a direct
+// conversation from a group and to label consolidated debt entries.
+func (c *Client) GetGroup(ctx context.Context, chatID int64) (*Group, error) {
+	result, err := c.db.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(c.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: fmt.Sprintf("GROUP#%d", chatID)},
+			"SK": &types.AttributeValueMemberS{Value: "METADATA"},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get group: %w", err)
+	}
+	if result.Item == nil {
+		return nil, fmt.Errorf("group not found")
+	}
+
+	var group Group
+	if err := attributevalue.UnmarshalMap(result.Item, &group); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal group: %w", err)
+	}
+	return &group, nil
+}
+
 // ============================================
 // MEMBER OPERATIONS
 // ============================================

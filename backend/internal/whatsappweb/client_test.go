@@ -58,4 +58,7 @@ func TestSendMessageWithOptionsKeepsFifteenthMenuOption(t *testing.T) {
 	if !strings.Contains(received.Text, "15. Opción O") {
 		t.Fatalf("fifteenth menu option is missing from WhatsApp text menu: %q", received.Text)
 	}
+	if received.Interactive == nil || len(received.Interactive.Options) != 15 {
+		t.Fatalf("interactive fallback options = %#v, want all 15 options", received.Interactive)
+	}
 }

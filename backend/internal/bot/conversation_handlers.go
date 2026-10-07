@@ -66,7 +66,12 @@ func (h *Handler) handleMenu(ctx context.Context, chatID int64, userID ...int64)
 // handleMenuCallback enruta los callbacks del menú principal
 func (h *Handler) handleMenuCallback(ctx context.Context, chatID, userID int64, userName, option, callbackID string) error {
 	_ = h.tg.AnswerCallbackQuery(ctx, callbackID, "")
+	return h.runMenuAction(ctx, chatID, userID, userName, option)
+}
 
+// runMenuAction is shared by Telegram callbacks, WhatsApp interactive
+// responses, numbered fallbacks, and natural-language menu choices.
+func (h *Handler) runMenuAction(ctx context.Context, chatID, userID int64, userName, option string) error {
 	switch option {
 	case "nuevo_gasto":
 		return h.startExpenseFlow(ctx, chatID, userID)
@@ -98,9 +103,42 @@ func (h *Handler) handleMenuCallback(ctx context.Context, chatID, userID int64, 
 		return h.handleClearTestData(ctx, chatID, userID)
 	case "resumir_lista":
 		return h.startExpenseSummary(ctx, chatID, userID)
+	case "mas_opciones":
+		return h.handleMoreMenu(ctx, chatID, userID, userName, 1)
+	case "mas_opciones_2":
+		return h.handleMoreMenu(ctx, chatID, userID, userName, 2)
+	case "mas_opciones_3":
+		return h.handleMoreMenu(ctx, chatID, userID, userName, 3)
+	case "mas_opciones_4":
+		return h.handleMoreMenu(ctx, chatID, userID, userName, 4)
+	case "mas_opciones_5":
+		return h.handleMoreMenu(ctx, chatID, userID, userName, 5)
 	default:
 		return nil
 	}
+}
+
+// handleMoreMenu creates compact pages that experimental WhatsApp reply
+// buttons can render (three actions at a time). Telegram still receives the
+// complete inline keyboard from handleMenu.
+func (h *Handler) handleMoreMenu(ctx context.Context, chatID, userID int64, userName string, page int) error {
+	pages := [][][]telegram.InlineKeyboardButton{
+		{{{Text: "💳 Mis deudas", CallbackData: "menu:mis_deudas"}, {Text: "📊 Balance", CallbackData: "menu:balance"}, {Text: "➡️ Más", CallbackData: "menu:mas_opciones_2"}}},
+		{{{Text: "➗ Dividir gasto", CallbackData: "menu:dividir"}, {Text: "🔄 Redividir", CallbackData: "menu:redividir"}, {Text: "➡️ Más", CallbackData: "menu:mas_opciones_3"}}},
+		{{{Text: "🐀 Recordatorios", CallbackData: "menu:recordatorios"}, {Text: "🐀 Avisar deudas", CallbackData: "menu:recordar_deudas"}, {Text: "➡️ Más", CallbackData: "menu:mas_opciones_4"}}},
+		{{{Text: "👥 Miembros", CallbackData: "menu:miembros"}, {Text: "💸 Pagar una deuda", CallbackData: "menu:pagar_deuda"}, {Text: "➡️ Más", CallbackData: "menu:mas_opciones_5"}}},
+		{{{Text: "❓ Ayuda", CallbackData: "menu:ayuda"}, {Text: "🧾 Resumir una lista", CallbackData: "menu:resumir_lista"}, {Text: "🧪 Crear pruebas", CallbackData: "menu:crear_prueba"}}, {{Text: "🎲 Simular operaciones", CallbackData: "menu:simular_prueba"}, {Text: "🧹 Limpiar pruebas", CallbackData: "menu:limpiar_prueba"}}},
+	}
+	if page < 1 || page > len(pages) {
+		return h.handleMenu(ctx, chatID, userID)
+	}
+
+	return h.tg.SendMessageWithOptions(ctx, &telegram.SendMessageRequest{
+		ChatID:      chatID,
+		Text:        "🤖 <b>Más opciones</b>\n\nElegí qué querés hacer:",
+		ParseMode:   "HTML",
+		ReplyMarkup: telegram.InlineKeyboardMarkup{InlineKeyboard: pages[page-1]},
+	})
 }
 
 // handleMenuRedivide muestra los gastos ya divididos. Elegir uno lo vuelve a
@@ -504,6 +542,9 @@ func (h *Handler) handleNaturalLanguage(ctx context.Context, chatID, userID int6
 	if handled, err := h.handleMenuNumber(ctx, chatID, userID, lower); handled {
 		return err
 	}
+	if option, ok := resolveMenuOptionText(text); ok {
+		return h.runMenuAction(ctx, chatID, userID, userName, option)
+	}
 
 	type trigger struct {
 		keywords []string
@@ -520,7 +561,10 @@ func (h *Handler) handleNaturalLanguage(ctx context.Context, chatID, userID int6
 			action:   func() error { return h.handleMenu(ctx, chatID, userID) },
 		},
 		{
-			keywords: []string{"nuevo gasto", "gasto nuevo", "agregar gasto", "anotar gasto", "cargar gasto", "cargar un gasto", "registrar gasto", "sumar gasto", "nuevo", "gasto"},
+			// Keep this intent explicit. The generic word "gasto" also appears
+			// in requests such as "ver gastos" and "dividir gasto", which must
+			// route to their own menu actions below.
+			keywords: []string{"nuevo gasto", "gasto nuevo", "agregar gasto", "anotar gasto", "cargar gasto", "cargar un gasto", "registrar gasto", "sumar gasto", "nuevo"},
 			action:   func() error { return h.startExpenseFlow(ctx, chatID, userID) },
 		},
 		{
@@ -592,43 +636,145 @@ func (h *Handler) handleNaturalLanguage(ctx context.Context, chatID, userID int6
 // handleMenuNumber ejecuta una opción del menú de texto. El bool permite
 // distinguir una opción inválida de un error de negocio al procesarla.
 func (h *Handler) handleMenuNumber(ctx context.Context, chatID, userID int64, text string) (bool, error) {
-	switch strings.TrimSpace(text) {
-	case "1":
-		return true, h.startExpenseFlow(ctx, chatID, userID)
-	case "2":
-		return true, h.handleViewExpenses(ctx, chatID)
-	case "3":
-		return true, h.handleMyDebts(ctx, chatID, userID)
-	case "4":
-		return true, h.handleBalance(ctx, chatID)
-	case "5":
-		return true, h.handleMenuDivide(ctx, chatID, userID)
-	case "6":
-		return true, h.handleMenuRedivide(ctx, chatID, userID)
-	case "7":
-		return true, h.handleMyReminders(ctx, chatID, userID)
-	case "8":
-		return true, h.handleRemindDebtors(ctx, chatID, userID)
-	case "9":
-		return true, h.handleMembers(ctx, chatID)
-	case "10":
-		return true, h.handleHelp(ctx, chatID)
-	case "11":
-		return true, h.handleMenuPay(ctx, chatID, userID)
-	case "12":
-		return true, h.handleCreateTestUsers(ctx, chatID, userID, []string{"default"})
-	case "13":
-		return true, h.handleRunTestSimulation(ctx, chatID, userID)
-	case "14":
-		return true, h.handleClearTestData(ctx, chatID, userID)
-	case "15":
-		return true, h.startExpenseSummary(ctx, chatID, userID)
-	default:
+	number := strings.TrimSpace(text)
+	if match := menuOptionNumberPattern.FindStringSubmatch(number); len(match) == 2 {
+		number = match[1]
+	}
+	option, ok := menuOptionNumbers[number]
+	if !ok {
 		return false, nil
 	}
+	return true, h.runMenuAction(ctx, chatID, userID, "", option)
 }
 
-var shortExpenseIDPattern = regexp.MustCompile(`(?i)\b[a-f0-9]{8}\b`)
+var (
+	shortExpenseIDPattern   = regexp.MustCompile(`(?i)\b[a-f0-9]{8}\b`)
+	menuOptionNumberPattern = regexp.MustCompile(`(?i)^\s*(?:opci[oó]n\s*)?([0-9]{1,2})(?:[.)\s]|$)`)
+	menuMentionPattern      = regexp.MustCompile(`@[[:alnum:]_+.-]+`)
+	menuNoisePattern        = regexp.MustCompile(`[\p{P}\p{S}]+`)
+)
+
+type menuTextOption struct {
+	action  string
+	aliases []string
+}
+
+var menuOptionNumbers = map[string]string{
+	"1": "nuevo_gasto", "2": "ver_gastos", "3": "mis_deudas", "4": "balance",
+	"5": "dividir", "6": "redividir", "7": "recordatorios", "8": "recordar_deudas",
+	"9": "miembros", "10": "ayuda", "11": "pagar_deuda", "12": "crear_prueba",
+	"13": "simular_prueba", "14": "limpiar_prueba", "15": "resumir_lista",
+}
+
+var menuTextOptions = []menuTextOption{
+	{action: "nuevo_gasto", aliases: []string{"nuevo gasto", "gasto nuevo", "agregar gasto", "anotar gasto", "cargar gasto", "registrar gasto", "sumar gasto"}},
+	{action: "ver_gastos", aliases: []string{"ver gastos", "mis gastos", "lista de gastos", "gastos del grupo", "ultimos gastos", "listar gastos"}},
+	{action: "mis_deudas", aliases: []string{"mis deudas", "cuanto debo", "que debo", "deudas pendientes"}},
+	{action: "balance", aliases: []string{"balance", "estado de cuentas", "como estamos"}},
+	{action: "dividir", aliases: []string{"dividir gasto", "quiero dividir", "separar gasto", "dividir"}},
+	{action: "redividir", aliases: []string{"redividir", "volver a dividir", "repartir de nuevo"}},
+	{action: "recordatorios", aliases: []string{"mis recordatorios", "ver recordatorios", "recordatorios", "recordatorio"}},
+	{action: "recordar_deudas", aliases: []string{"recordar deudas", "avisar deudas", "recordarles", "avisales", "avisar a los deudores"}},
+	{action: "miembros", aliases: []string{"miembros", "integrantes", "quienes somos", "quien esta"}},
+	{action: "ayuda", aliases: []string{"ayuda", "como funciona", "que podes hacer"}},
+	{action: "pagar_deuda", aliases: []string{"pagar una deuda", "marcar pago", "marcar como pagado", "ya pague", "pagar deuda"}},
+	{action: "crear_prueba", aliases: []string{"crear personas de prueba", "crear pruebas", "personas de prueba"}},
+	{action: "simular_prueba", aliases: []string{"simular operaciones", "simulacion", "simular"}},
+	{action: "limpiar_prueba", aliases: []string{"limpiar datos de prueba", "limpiar pruebas"}},
+	{action: "resumir_lista", aliases: []string{"resumir una lista", "resumir lista", "resumir gastos", "resumen de gastos", "resumen lista", "sumar gastos y reintegros", "calcular reintegros"}},
+}
+
+// resolveMenuOptionText handles visible menu labels as well as small typing
+// mistakes. It only returns a fuzzy result when it is unambiguous, so the bot
+// never turns a casual message into an unrelated financial action.
+func resolveMenuOptionText(text string) (string, bool) {
+	selection := normalizeMenuText(text)
+	if selection == "" {
+		return "", false
+	}
+
+	if match := menuOptionNumberPattern.FindStringSubmatch(selection); len(match) == 2 {
+		if action, ok := menuOptionNumbers[match[1]]; ok {
+			return action, true
+		}
+	}
+
+	for _, option := range menuTextOptions {
+		for _, alias := range option.aliases {
+			if selection == alias || strings.Contains(selection, alias) {
+				return option.action, true
+			}
+		}
+	}
+
+	bestAction := ""
+	bestDistance := -1
+	ambiguous := false
+	for _, option := range menuTextOptions {
+		for _, alias := range option.aliases {
+			distance := menuLevenshteinDistance(selection, alias)
+			if distance > allowedMenuTypos(alias) {
+				continue
+			}
+			if bestDistance == -1 || distance < bestDistance {
+				bestAction, bestDistance, ambiguous = option.action, distance, false
+			} else if distance == bestDistance && option.action != bestAction {
+				ambiguous = true
+			}
+		}
+	}
+	return bestAction, bestDistance >= 0 && !ambiguous
+}
+
+func normalizeMenuText(text string) string {
+	text = strings.ToLower(menuMentionPattern.ReplaceAllString(text, " "))
+	replacer := strings.NewReplacer("á", "a", "é", "e", "í", "i", "ó", "o", "ú", "u", "ü", "u", "ñ", "n")
+	text = replacer.Replace(text)
+	text = menuNoisePattern.ReplaceAllString(text, " ")
+	return strings.Join(strings.Fields(text), " ")
+}
+
+func allowedMenuTypos(alias string) int {
+	length := len([]rune(strings.ReplaceAll(alias, " ", "")))
+	if length <= 6 {
+		return 1
+	}
+	if length <= 14 {
+		return 2
+	}
+	return 3
+}
+
+func menuLevenshteinDistance(left, right string) int {
+	leftRunes, rightRunes := []rune(left), []rune(right)
+	previous := make([]int, len(rightRunes)+1)
+	for j := range previous {
+		previous[j] = j
+	}
+	for i, leftRune := range leftRunes {
+		current := make([]int, len(rightRunes)+1)
+		current[0] = i + 1
+		for j, rightRune := range rightRunes {
+			cost := 0
+			if leftRune != rightRune {
+				cost = 1
+			}
+			current[j+1] = minInt(current[j]+1, previous[j+1]+1, previous[j]+cost)
+		}
+		previous = current
+	}
+	return previous[len(rightRunes)]
+}
+
+func minInt(values ...int) int {
+	minimum := values[0]
+	for _, value := range values[1:] {
+		if value < minimum {
+			minimum = value
+		}
+	}
+	return minimum
+}
 
 // handleQuotedMenuChoice resolves a numeric reply against the bot message it
 // quotes, instead of against whichever temporary conversation happened last.

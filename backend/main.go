@@ -387,6 +387,7 @@ func handleWaWebInbound(ctx context.Context, request events.APIGatewayProxyReque
 			QuotedText:    payload.QuotedText,
 			InteractiveID: payload.InteractiveID,
 			IsMentioned:   payload.IsMentioned,
+			IsWhatsAppWeb: true,
 			From: &telegram.User{
 				ID:        senderID,
 				FirstName: payload.FromName,

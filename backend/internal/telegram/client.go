@@ -50,6 +50,10 @@ type Message struct {
 	// a callback by typing its internal identifier.
 	InteractiveID string `json:"-"`
 	IsMentioned   bool   `json:"-"`
+	// IsWhatsAppWeb marks updates received through the WhatsApp Web sidecar.
+	// It lets group routing be stricter there without changing Telegram's
+	// native command and inline-keyboard behavior.
+	IsWhatsAppWeb bool `json:"-"`
 }
 
 // User representa un usuario de Telegram

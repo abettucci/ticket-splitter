@@ -92,6 +92,14 @@ func (h *Handler) HandleUpdate(ctx context.Context, update *telegram.Update) err
 	if fields := strings.Fields(text); len(fields) > 1 && strings.HasPrefix(fields[0], "@") && strings.HasPrefix(fields[1], "/") {
 		text = strings.Join(fields[1:], " ")
 	}
+	// In WhatsApp groups, never treat ordinary group conversation as bot input.
+	// A person must @mention Splitter, reply to one of its messages (the
+	// sidecar marks that as IsMentioned), or use an actual interactive action.
+	// Telegram keeps its established command behavior because it has native
+	// bot command routing and does not set IsWhatsAppWeb.
+	if msg.IsWhatsAppWeb && msg.Chat.Type == "group" && !msg.IsMentioned {
+		return nil
+	}
 	// In WhatsApp groups, a reply can target an older bot message while a newer
 	// conversation state is still active. The quoted menu is more specific than
 	// that transient state, so resolve it first.
@@ -106,9 +114,9 @@ func (h *Handler) HandleUpdate(ctx context.Context, update *telegram.Update) err
 		if state != nil {
 			return h.handleConversationStep(ctx, chatID, userID, displayName, text, state)
 		}
-		// In private chats, natural language is always safe. In groups, only
-		// respond when the person explicitly mentioned Splitter; active flows
-		// can continue without repeating the mention.
+		// In private chats, natural language is always safe. In WhatsApp groups,
+		// the guard above also applies to active flows, so a user's unrelated
+		// messages are never consumed as answers to a bot question.
 		if msg.Chat.Type == "private" {
 			return h.handleNaturalLanguage(ctx, chatID, userID, displayName, text, false)
 		}
@@ -698,6 +706,47 @@ Tip: Usa /ver_gastos para ver los IDs de los gastos.`)
 
 // handleMyDebts maneja el comando /mis_deudas
 func (h *Handler) handleMyDebts(ctx context.Context, chatID, userID int64) error {
+	group, err := h.db.GetGroup(ctx, chatID)
+	if err != nil {
+		h.logger.Printf("Error getting current chat metadata for debts: %v", err)
+		return h.handleGroupMyDebts(ctx, chatID, userID)
+	}
+	if group.Type == "private" {
+		return h.handleConsolidatedMyDebts(ctx, chatID, userID)
+	}
+	return h.handleGroupMyDebts(ctx, chatID, userID)
+}
+
+// handleGroupMyDebts shows only the caller's unpaid shares for this group.
+// The message is intentionally sent to the group so members can coordinate
+// openly without exposing debts from other groups.
+func (h *Handler) handleGroupMyDebts(ctx context.Context, chatID, userID int64) error {
+	debts, err := h.pendingDebtsForGroup(ctx, chatID, userID)
+	if err != nil {
+		h.logger.Printf("Error getting group debts: %v", err)
+		return h.tg.SendMessage(ctx, chatID, "❌ Error al obtener tus deudas de este grupo.")
+	}
+	if len(debts) == 0 {
+		return h.tg.SendMessage(ctx, chatID, "🎉 No tenés deudas pendientes en este grupo.")
+	}
+
+	var sb strings.Builder
+	sb.WriteString("💳 <b>Tus deudas en este grupo</b>\n\n")
+	var total float64
+	for _, debt := range debts {
+		sb.WriteString(fmt.Sprintf("• %s — <b>%s</b>\n", telegram.FormatMoney(debt.split.Amount), telegram.EscapeHTML(debt.expense.Description)))
+		sb.WriteString(fmt.Sprintf("  Le debés a: %s\n", telegram.EscapeHTML(debtPayeeName(debt.expense))))
+		total += debt.split.Amount
+	}
+	sb.WriteString(fmt.Sprintf("\n💰 <b>Total en este grupo: %s</b>", telegram.FormatMoney(total)))
+	sb.WriteString("\n\n💸 Elegí «Pagar una deuda» para marcar tu parte como pagada.")
+	return h.tg.SendMessage(ctx, chatID, sb.String())
+}
+
+// handleConsolidatedMyDebts is the private-chat view. Splits retain their
+// source chat ID, so each debt can be loaded and labeled with its own group
+// instead of being incorrectly looked up in the direct conversation.
+func (h *Handler) handleConsolidatedMyDebts(ctx context.Context, chatID, userID int64) error {
 	splits, err := h.db.GetUserPendingSplits(ctx, userID)
 	if err != nil {
 		h.logger.Printf("Error getting user splits: %v", err)
@@ -708,47 +757,61 @@ func (h *Handler) handleMyDebts(ctx context.Context, chatID, userID int64) error
 		return h.tg.SendMessage(ctx, chatID, "🎉 ¡No tienes deudas pendientes!")
 	}
 
-	var sb strings.Builder
-	sb.WriteString("💳 <b>Tus deudas pendientes</b>\n\n")
-
 	var total float64
-	var validSplitsCount int
-	var orphanedSplits []string // IDs de splits huérfanos para limpiar
+	var entries []string
 
 	for _, split := range splits {
-		// Verificar que el gasto padre no esté eliminado
-		shortID := split.ExpenseID[:8]
-		expense, err := h.db.GetExpenseByShortID(ctx, chatID, shortID)
-		if err != nil {
-			// El gasto fue eliminado, marcar split como huérfano para limpiar
-			orphanedSplits = append(orphanedSplits, split.ExpenseID)
+		// Legacy splits created before chat_id was introduced cannot be safely
+		// attributed to a group. Never delete them as a side effect of a read.
+		if split.ChatID == 0 || len(split.ExpenseID) < 8 {
+			h.logger.Printf("Skipping legacy split %s without source group", split.ExpenseID)
 			continue
 		}
-
-		sb.WriteString(fmt.Sprintf("• %s (%s) - ID: <code>%s</code>\n", telegram.FormatMoney(split.Amount), telegram.EscapeHTML(expense.Description), shortID))
+		shortID := split.ExpenseID[:8]
+		expense, err := h.db.GetExpenseByShortID(ctx, split.ChatID, shortID)
+		if err != nil {
+			h.logger.Printf("Skipping unavailable expense %s for consolidated debts: %v", split.ExpenseID, err)
+			continue
+		}
+		debtGroup, err := h.db.GetGroup(ctx, split.ChatID)
+		if err != nil {
+			h.logger.Printf("Skipping debt %s because its group is unavailable: %v", split.ExpenseID, err)
+			continue
+		}
+		groupName := debtGroup.Title
+		if groupName == "" {
+			groupName = fmt.Sprintf("Grupo %d", split.ChatID)
+		}
+		entries = append(entries, fmt.Sprintf("• %s — <b>%s</b>\n  Grupo: %s · Le debés a: %s\n", telegram.FormatMoney(split.Amount), telegram.EscapeHTML(expense.Description), telegram.EscapeHTML(groupName), telegram.EscapeHTML(debtPayeeName(expense))))
 		total += split.Amount
-		validSplitsCount++
 	}
 
-	// Limpiar splits huérfanos en background (gastos eliminados)
-	if len(orphanedSplits) > 0 {
-		go func() {
-			for _, expenseID := range orphanedSplits {
-				if err := h.db.DeleteExpenseSplits(context.Background(), expenseID); err != nil {
-					h.logger.Printf("Error cleaning orphaned splits for expense %s: %v", expenseID, err)
-				}
-			}
-		}()
-	}
-
-	if validSplitsCount == 0 {
+	if len(entries) == 0 {
 		return h.tg.SendMessage(ctx, chatID, "🎉 ¡No tienes deudas pendientes!")
 	}
 
+	var sb strings.Builder
+	sb.WriteString("💳 <b>Tus deudas pendientes</b>\n<i>Todos tus grupos</i>\n\n")
+	for _, entry := range entries {
+		sb.WriteString(entry)
+	}
 	sb.WriteString(fmt.Sprintf("\n💰 <b>Total adeudado: %s</b>", telegram.FormatMoney(total)))
-	sb.WriteString("\n\n💸 Elegí «Pagar una deuda» en el menú para marcar una como pagada.")
+	sb.WriteString("\n\n💸 Para pagar una deuda, abrí el grupo correspondiente y elegí «Pagar una deuda».")
 
 	return h.tg.SendMessage(ctx, chatID, sb.String())
+}
+
+func debtPayeeName(expense *db.Expense) string {
+	if len(expense.Payers) == 1 && expense.Payers[0].UserName != "" {
+		return expense.Payers[0].UserName
+	}
+	if len(expense.Payers) > 1 {
+		return "quienes pagaron el gasto"
+	}
+	if expense.CreatorName != "" {
+		return expense.CreatorName
+	}
+	return "la persona que registró el gasto"
 }
 
 // handlePay maneja el comando /pagar

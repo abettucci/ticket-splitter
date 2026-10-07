@@ -43,9 +43,23 @@ func NewClient() *Client {
 type sendRequest struct {
 	// Keep chat IDs as JSON strings: group JIDs can exceed JavaScript's safe
 	// integer range, and the Node sidecar must preserve every digit.
-	ChatID   string `json:"chat_id"`
-	ChatType string `json:"chat_type"`
-	Text     string `json:"text"`
+	ChatID      string           `json:"chat_id"`
+	ChatType    string           `json:"chat_type"`
+	Text        string           `json:"text"`
+	Interactive *interactiveMenu `json:"interactive,omitempty"`
+}
+
+// interactiveMenu is an optional enhancement for the WhatsApp Web sidecar.
+// Text is always sent as a complete numbered fallback if the experimental
+// button transport cannot be used by the installed WhatsApp Web client.
+type interactiveMenu struct {
+	Kind    string              `json:"kind"`
+	Options []interactiveOption `json:"options"`
+}
+
+type interactiveOption struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
 }
 
 // RememberChatType stores the route for a chat that has just sent an inbound message.
@@ -62,12 +76,12 @@ func (c *Client) SendMessage(ctx context.Context, chatID int64, text string) err
 	if value, ok := c.chatTypes.Load(chatID); ok {
 		chatType, _ = value.(string)
 	}
-	return c.sendInternal(ctx, chatID, chatType, text)
+	return c.sendInternal(ctx, chatID, chatType, text, nil)
 }
 
-// SendMessageWithOptions renders Telegram keyboards as a numbered text menu.
-// WhatsApp Web removed support for sending buttons and lists from unofficial
-// clients, so a text menu is the reliable cross-client interaction model.
+// SendMessageWithOptions sends an experimental WhatsApp button menu when the
+// sidecar enables it. The numbered text menu remains in the request as the
+// reliable fallback for WhatsApp Web builds that reject interactive messages.
 func (c *Client) SendMessageWithOptions(ctx context.Context, req *telegram.SendMessageRequest) error {
 	keyboard, ok := req.ReplyMarkup.(telegram.InlineKeyboardMarkup)
 	if !ok {
@@ -75,19 +89,25 @@ func (c *Client) SendMessageWithOptions(ctx context.Context, req *telegram.SendM
 	}
 
 	rows := make([]string, 0, maxWhatsAppTextMenuOptions)
+	options := make([]interactiveOption, 0, maxWhatsAppTextMenuOptions)
 	for _, row := range keyboard.InlineKeyboard {
 		for _, button := range row {
 			if button.CallbackData == "" || len(rows) == maxWhatsAppTextMenuOptions {
 				continue
 			}
 			rows = append(rows, button.Text)
+			options = append(options, interactiveOption{ID: button.CallbackData, Title: button.Text})
 		}
 	}
 	if len(rows) == 0 {
 		return c.SendMessage(ctx, req.ChatID, req.Text)
 	}
 
-	return c.sendInternal(ctx, req.ChatID, c.chatTypeFor(req.ChatID), formatNumberedOptions(req.Text, rows))
+	kind := "options"
+	if strings.Contains(strings.ToLower(req.Text), "¿qué querés hacer?") {
+		kind = "main_menu"
+	}
+	return c.sendInternal(ctx, req.ChatID, c.chatTypeFor(req.ChatID), formatNumberedOptions(req.Text, rows), &interactiveMenu{Kind: kind, Options: options})
 }
 
 // EditMessageText: WhatsApp no permite editar mensajes a través de la API web pública.
@@ -101,7 +121,7 @@ func (c *Client) AnswerCallbackQuery(_ context.Context, _ string, _ string) erro
 	return nil
 }
 
-func (c *Client) sendInternal(ctx context.Context, chatID int64, chatType, text string) error {
+func (c *Client) sendInternal(ctx context.Context, chatID int64, chatType, text string, interactive *interactiveMenu) error {
 	if c.sidecarURL == "" {
 		return fmt.Errorf("waweb: WAWEB_SIDECAR_URL not configured")
 	}
@@ -109,7 +129,7 @@ func (c *Client) sendInternal(ctx context.Context, chatID int64, chatType, text 
 		return fmt.Errorf("waweb: WAWEB_SHARED_SECRET not configured")
 	}
 
-	body, err := json.Marshal(sendRequest{ChatID: strconv.FormatInt(chatID, 10), ChatType: chatType, Text: text})
+	body, err := json.Marshal(sendRequest{ChatID: strconv.FormatInt(chatID, 10), ChatType: chatType, Text: text, Interactive: interactive})
 	if err != nil {
 		return fmt.Errorf("waweb: marshal: %w", err)
 	}
