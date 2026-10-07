@@ -641,11 +641,16 @@ func (h *Handler) handleQuotedMenuChoice(ctx context.Context, chatID, userID int
 	// cabecera es única entre los mensajes del bot, por lo que alcanza para
 	// reconocer el menú principal aunque el preview haya sido truncado.
 	if strings.Contains(quotedLower, "¿qué querés hacer?") {
-		if _, err := strconv.Atoi(selection); err != nil {
-			return false, nil
-		}
 		h.conv.Clear(chatID, userID)
-		return h.handleMenuNumber(ctx, chatID, userID, selection)
+		if _, err := strconv.Atoi(selection); err == nil {
+			return h.handleMenuNumber(ctx, chatID, userID, selection)
+		}
+
+		// WhatsApp users often reply with the visible label instead of its
+		// number (for example, "resumir una lista"). Treat that reply as a
+		// natural-language menu selection while keeping the quoted menu as the
+		// authoritative context.
+		return true, h.handleNaturalLanguage(ctx, chatID, userID, "", selection, false)
 	}
 
 	if strings.Contains(quotedLower, "¿qué gasto querés dividir?") {
