@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/abettucci/group-split-bot/internal/db"
 	"github.com/abettucci/group-split-bot/internal/security"
 	"github.com/abettucci/group-split-bot/internal/telegram"
 )
@@ -216,16 +217,15 @@ func (h *Handler) handleMenuDivide(ctx context.Context, chatID int64, userID ...
 		return h.tg.SendMessage(ctx, chatID, "✅ Todos los gastos ya fueron divididos.")
 	}
 
-	// WhatsApp no preserva un estado de conversación entre invocaciones de
-	// Lambda. Si sólo queda un gasto pendiente, no le pedimos a la persona un
-	// segundo número: "Dividir gasto" completa la operación en ese momento.
-	// Esto también evita que una respuesta a un menú anterior quede ambigua.
+	// If only one expense is pending, skip choosing the expense but still ask
+	// how it should be split. A payer must be able to exclude themselves (or
+	// any other member) from the debtors.
 	if len(divideOptions) == 1 {
 		initiatorID := int64(0)
 		if len(userID) > 0 {
 			initiatorID = userID[0]
 		}
-		return h.handleDivide(ctx, chatID, initiatorID, []string{onlyPendingExpenseID})
+		return h.showExpenseSplitMode(ctx, chatID, initiatorID, onlyPendingExpenseID)
 	}
 
 	// Telegram usa botones; WhatsApp puede responder citando esta lista. El
@@ -239,10 +239,180 @@ func (h *Handler) handleMenuDivide(ctx context.Context, chatID int64, userID ...
 
 	return h.tg.SendMessageWithOptions(ctx, &telegram.SendMessageRequest{
 		ChatID:      chatID,
-		Text:        "➗ <b>¿Qué gasto querés dividir?</b>\n\nElegí uno para dividirlo entre todos:",
+		Text:        "➗ <b>¿Qué gasto querés dividir?</b>\n\nElegí un gasto y después definí quiénes participan:",
 		ParseMode:   "HTML",
 		ReplyMarkup: telegram.InlineKeyboardMarkup{InlineKeyboard: rows},
 	})
+}
+
+// showExpenseSplitMode lets the person choose an equal split across everyone
+// or a selective split. The latter is essential for gifts: a person can pay
+// 100% upfront without becoming one of the debtors.
+func (h *Handler) showExpenseSplitMode(ctx context.Context, chatID, userID int64, shortID string) error {
+	expense, err := h.db.GetExpenseByShortID(ctx, chatID, shortID)
+	if err != nil {
+		return h.tg.SendMessage(ctx, chatID, "❌ Gasto no encontrado. Pedí «ver gastos» para revisar la lista.")
+	}
+	if expense.IsDivided {
+		return h.tg.SendMessage(ctx, chatID, "⚠️ Este gasto ya fue dividido.")
+	}
+	return h.showExpenseSplitModeForExpense(ctx, chatID, userID, expense)
+}
+
+func (h *Handler) showExpenseSplitModeForExpense(ctx context.Context, chatID, userID int64, expense *db.Expense) error {
+	shortID := expense.ID[:8]
+	h.conv.Set(chatID, userID, &ConversationState{
+		Step:           StepSelectExpenseSplitMode,
+		ExpenseShortID: shortID,
+	})
+
+	keyboard := telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{
+		{
+			{Text: "➗ Dividir entre todos", CallbackData: fmt.Sprintf("divide:%s", shortID)},
+			{Text: "👥 Elegir participantes", CallbackData: fmt.Sprintf("participants:%s", shortID)},
+		},
+		{{Text: "📋 Ver gastos", CallbackData: "menu:ver_gastos"}},
+	}}
+
+	return h.tg.SendMessageWithOptions(ctx, &telegram.SendMessageRequest{
+		ChatID: chatID,
+		Text: fmt.Sprintf(
+			"➗ <b>¿Cómo querés dividir %s?</b>\n"+
+				"🆔 ID: <code>%s</code>\n\n"+
+				"Elegí si participan todos los miembros o sólo algunas personas.\n\n"+
+				"💡 Si alguien pagó el 100%% por el resto, elegí participantes y dejalo afuera.",
+			telegram.EscapeHTML(expense.Description),
+			shortID,
+		),
+		ParseMode:   "HTML",
+		ReplyMarkup: keyboard,
+	})
+}
+
+func (h *Handler) startParticipantSelection(ctx context.Context, chatID, userID int64, shortID string) error {
+	expense, err := h.db.GetExpenseByShortID(ctx, chatID, shortID)
+	if err != nil || expense.IsDivided {
+		return h.showExpenseSplitMode(ctx, chatID, userID, shortID)
+	}
+	members, err := h.db.GetGroupMembers(ctx, chatID)
+	if err != nil || len(members) == 0 {
+		return h.tg.SendMessage(ctx, chatID, "❌ No hay miembros disponibles para elegir.")
+	}
+
+	options := make(map[int]int64, len(members))
+	var builder strings.Builder
+	builder.WriteString(fmt.Sprintf("👥 <b>¿Quiénes deben pagar %s?</b>\n\n", telegram.EscapeHTML(expense.Description)))
+	builder.WriteString(fmt.Sprintf("🆔 ID: <code>%s</code>\n", expense.ID[:8]))
+	builder.WriteString(fmt.Sprintf("<b>%s</b> pagó el total. Elegí sólo a quienes participaron; puede quedar afuera.\n\n", telegram.EscapeHTML(expense.CreatorName)))
+	builder.WriteString("Respondé con números separados por coma. Si preferís nombres, respondé a este mensaje.\nEjemplo: <b>1, 3</b>\n\n")
+	for index, member := range members {
+		n := index + 1
+		options[n] = member.UserID
+		fmt.Fprintf(&builder, "%d. %s\n", n, telegram.EscapeHTML(member.DisplayName))
+	}
+
+	h.conv.Set(chatID, userID, &ConversationState{
+		Step:               StepSelectExpenseParticipants,
+		ExpenseShortID:     expense.ID[:8],
+		ParticipantOptions: options,
+	})
+	return h.tg.SendMessage(ctx, chatID, builder.String())
+}
+
+func (h *Handler) completeParticipantSplit(ctx context.Context, chatID, userID int64, text string, state *ConversationState) error {
+	members, err := h.db.GetGroupMembers(ctx, chatID)
+	if err != nil {
+		return h.tg.SendMessage(ctx, chatID, "❌ No pude obtener los miembros del grupo. Intentá de nuevo.")
+	}
+	selectedMembers, invalid := selectSplitParticipants(text, state.ParticipantOptions, members)
+	if invalid != "" {
+		return h.tg.SendMessage(ctx, chatID, fmt.Sprintf("❌ No entendí «%s». Respondé con números como <b>1, 3</b> o nombres de la lista.", telegram.EscapeHTML(invalid)))
+	}
+	if len(selectedMembers) == 0 {
+		return h.tg.SendMessage(ctx, chatID, "❌ Elegí al menos una persona que deba pagar.")
+	}
+
+	expense, err := h.db.GetExpenseByShortID(ctx, chatID, state.ExpenseShortID)
+	if err != nil {
+		return h.tg.SendMessage(ctx, chatID, "❌ Gasto no encontrado. Pedí «ver gastos» para revisar la lista.")
+	}
+	if expense.IsDivided {
+		h.conv.Clear(chatID, userID)
+		return h.tg.SendMessage(ctx, chatID, "⚠️ Este gasto ya fue dividido.")
+	}
+	if err := h.db.CreateSplits(ctx, expense, selectedMembers); err != nil {
+		h.logger.Printf("Error creating selective splits: %v", err)
+		return h.tg.SendMessage(ctx, chatID, "❌ Error al dividir el gasto.")
+	}
+	h.conv.Clear(chatID, userID)
+
+	amountPerPerson := expense.TotalAmount / float64(len(selectedMembers))
+	var builder strings.Builder
+	builder.WriteString(fmt.Sprintf("💰 <b>Gasto dividido: %s</b>\n\n", telegram.EscapeHTML(expense.Description)))
+	builder.WriteString(fmt.Sprintf("👤 Pagó: %s\n", telegram.EscapeHTML(expense.CreatorName)))
+	builder.WriteString(fmt.Sprintf("👥 Deben pagar: %d\n", len(selectedMembers)))
+	builder.WriteString(fmt.Sprintf("💵 Por persona: <b>%s</b>\n\n", telegram.FormatMoney(amountPerPerson)))
+	for _, member := range selectedMembers {
+		status := "⏳ Pendiente"
+		if member.UserID == expense.CreatedBy {
+			status = "✅ Ya pagó"
+		}
+		fmt.Fprintf(&builder, "• %s: %s\n", telegram.EscapeHTML(member.DisplayName), status)
+	}
+	h.logChangelog(chatID, userID, "", "expense", expense.ID[:8], expense.Description, "divided", map[string]string{
+		"participantes": fmt.Sprintf("%d", len(selectedMembers)),
+		"por persona":   telegram.FormatMoney(amountPerPerson),
+		"tipo":          "selectivo",
+	})
+	return h.tg.SendMessage(ctx, chatID, builder.String())
+}
+
+func selectSplitParticipants(text string, options map[int]int64, members []db.Member) ([]db.Member, string) {
+	selectedIDs := make(map[int64]struct{})
+	selection := strings.TrimSpace(text)
+	if selection == "" {
+		return nil, ""
+	}
+
+	if strings.IndexFunc(selection, func(r rune) bool { return r >= '0' && r <= '9' }) >= 0 {
+		for _, rawNumber := range regexp.MustCompile(`\d+`).FindAllString(selection, -1) {
+			number, _ := strconv.Atoi(rawNumber)
+			memberID, ok := options[number]
+			if !ok {
+				return nil, rawNumber
+			}
+			selectedIDs[memberID] = struct{}{}
+		}
+	} else {
+		for _, rawName := range strings.FieldsFunc(strings.ToLower(selection), func(r rune) bool {
+			return r == ',' || r == ';' || r == '\n'
+		}) {
+			name := strings.TrimSpace(strings.TrimPrefix(rawName, "@"))
+			if name == "" {
+				continue
+			}
+			matched := false
+			for _, member := range members {
+				memberName := strings.ToLower(member.DisplayName)
+				if name == memberName || strings.Contains(memberName, name) {
+					selectedIDs[member.UserID] = struct{}{}
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				return nil, name
+			}
+		}
+	}
+
+	selected := make([]db.Member, 0, len(selectedIDs))
+	for _, member := range members {
+		if _, ok := selectedIDs[member.UserID]; ok {
+			selected = append(selected, member)
+		}
+	}
+	return selected, ""
 }
 
 // startExpenseFlow inicia el flujo conversacional para registrar un nuevo gasto
@@ -277,14 +447,33 @@ func (h *Handler) handleConversationStep(ctx context.Context, chatID, userID int
 		lower := strings.ToLower(strings.TrimSpace(text))
 		switch {
 		case lower == "1" || strings.Contains(lower, "dividir"):
-			h.conv.Clear(chatID, userID)
-			return h.handleDivide(ctx, chatID, userID, []string{state.ExpenseShortID})
-		case lower == "2" || strings.Contains(lower, "ver gasto"):
+			return h.showExpenseSplitMode(ctx, chatID, userID, state.ExpenseShortID)
+		case lower == "2" || strings.Contains(lower, "elegir") || strings.Contains(lower, "particip"):
+			return h.startParticipantSelection(ctx, chatID, userID, state.ExpenseShortID)
+		case lower == "3" || strings.Contains(lower, "ver gasto"):
 			h.conv.Clear(chatID, userID)
 			return h.handleViewExpenses(ctx, chatID)
 		default:
-			return h.tg.SendMessage(ctx, chatID, "❌ Elegí 1 para dividir el gasto recién creado o 2 para ver los gastos.")
+			return h.tg.SendMessage(ctx, chatID, "❌ Elegí 1 para dividir entre todos, 2 para elegir participantes o 3 para ver gastos.")
 		}
+
+	case StepSelectExpenseSplitMode:
+		lower := strings.ToLower(strings.TrimSpace(text))
+		switch {
+		case lower == "1" || strings.Contains(lower, "entre todos"):
+			h.conv.Clear(chatID, userID)
+			return h.handleDivide(ctx, chatID, userID, []string{state.ExpenseShortID})
+		case lower == "2" || strings.Contains(lower, "elegir") || strings.Contains(lower, "particip"):
+			return h.startParticipantSelection(ctx, chatID, userID, state.ExpenseShortID)
+		case lower == "3" || strings.Contains(lower, "ver gasto"):
+			h.conv.Clear(chatID, userID)
+			return h.handleViewExpenses(ctx, chatID)
+		default:
+			return h.tg.SendMessage(ctx, chatID, "❌ Elegí 1 para dividir entre todos, 2 para elegir participantes o 3 para ver gastos.")
+		}
+
+	case StepSelectExpenseParticipants:
+		return h.completeParticipantSplit(ctx, chatID, userID, text, state)
 
 	case StepSelectMenuOption:
 		h.conv.Clear(chatID, userID)
@@ -338,13 +527,13 @@ func (h *Handler) handleConversationStep(ctx context.Context, chatID, userID int
 		if n, err := strconv.Atoi(strings.TrimSpace(text)); err == nil {
 			if shortID, ok := state.DivideOptions[n]; ok {
 				h.conv.Clear(chatID, userID)
-				return h.handleDivide(ctx, chatID, userID, []string{shortID})
+				return h.showExpenseSplitMode(ctx, chatID, userID, shortID)
 			}
 			return h.tg.SendMessage(ctx, chatID, fmt.Sprintf("❌ Opción %d no válida. Escribí «dividir» para ver la lista de nuevo.", n))
 		}
 		// Intentar como shortID directo
 		h.conv.Clear(chatID, userID)
-		return h.handleDivide(ctx, chatID, userID, []string{strings.TrimSpace(text)})
+		return h.showExpenseSplitMode(ctx, chatID, userID, strings.TrimSpace(text))
 
 	case StepSelectRedivideExpense:
 		h.conv.Clear(chatID, userID)
@@ -510,32 +699,17 @@ func (h *Handler) createExpenseFromConversation(ctx context.Context, chatID, use
 		registeredByMsg = fmt.Sprintf("\n📝 Registrado por: %s", userName)
 	}
 
-	keyboard := telegram.InlineKeyboardMarkup{
-		InlineKeyboard: [][]telegram.InlineKeyboardButton{
-			{
-				{Text: "➗ Dividir entre todos", CallbackData: fmt.Sprintf("divide:%s", shortID)},
-				{Text: "📋 Ver gastos", CallbackData: "menu:ver_gastos"},
-			},
-		},
+	if err := h.tg.SendMessage(ctx, chatID, fmt.Sprintf(
+		"✅ <b>Gasto registrado</b>\n\n📝 <b>%s</b>\n💰 Monto: %s\n👤 Pagado por: %s%s\n🆔 ID: <code>%s</code>",
+		telegram.EscapeHTML(state.Description),
+		telegram.FormatMoney(state.Amount),
+		telegram.EscapeHTML(payerUserName),
+		registeredByMsg,
+		shortID,
+	)); err != nil {
+		return err
 	}
-	h.conv.Set(chatID, userID, &ConversationState{
-		Step:           StepSelectNewExpenseAction,
-		ExpenseShortID: shortID,
-	})
-
-	return h.tg.SendMessageWithOptions(ctx, &telegram.SendMessageRequest{
-		ChatID: chatID,
-		Text: fmt.Sprintf(
-			"✅ <b>Gasto registrado</b>\n\n📝 <b>%s</b>\n💰 Monto: %s\n👤 Pagado por: %s%s\n🆔 ID: <code>%s</code>",
-			telegram.EscapeHTML(state.Description),
-			telegram.FormatMoney(state.Amount),
-			telegram.EscapeHTML(payerUserName),
-			registeredByMsg,
-			shortID,
-		),
-		ParseMode:   "HTML",
-		ReplyMarkup: keyboard,
-	})
+	return h.showExpenseSplitModeForExpense(ctx, chatID, userID, expense)
 }
 
 // handleNaturalLanguage interpreta texto libre. En grupos solo se invoca al
@@ -864,7 +1038,7 @@ func (h *Handler) handleQuotedMenuChoice(ctx context.Context, chatID, userID int
 			position++
 			if position == n {
 				h.conv.Clear(chatID, userID)
-				return true, h.handleDivide(ctx, chatID, userID, []string{expense.ID[:8]})
+				return true, h.showExpenseSplitMode(ctx, chatID, userID, expense.ID[:8])
 			}
 		}
 		return true, h.tg.SendMessage(ctx, chatID, fmt.Sprintf("❌ Opción %d no válida. Respondé con un gasto de la lista citada.", n))
@@ -890,6 +1064,47 @@ func (h *Handler) handleQuotedMenuChoice(ctx context.Context, chatID, userID int
 			h.conv.Clear(chatID, userID)
 			return true, h.handleDivide(ctx, chatID, userID, []string{shortID})
 		}
+	}
+
+	if strings.Contains(quotedLower, "¿cómo querés dividir") || strings.Contains(quotedLower, "como queres dividir") {
+		shortID := shortExpenseIDPattern.FindString(quotedText)
+		if shortID == "" {
+			return false, nil
+		}
+		lowerSelection := strings.ToLower(selection)
+		switch {
+		case selection == "1" || strings.Contains(lowerSelection, "entre todos"):
+			h.conv.Clear(chatID, userID)
+			return true, h.handleDivide(ctx, chatID, userID, []string{shortID})
+		case selection == "2" || strings.Contains(lowerSelection, "elegir") || strings.Contains(lowerSelection, "particip"):
+			return true, h.startParticipantSelection(ctx, chatID, userID, shortID)
+		case selection == "3" || strings.Contains(lowerSelection, "ver gasto"):
+			h.conv.Clear(chatID, userID)
+			return true, h.handleViewExpenses(ctx, chatID)
+		}
+	}
+
+	// A participant prompt contains the expense ID and the member list. This
+	// makes a WhatsApp reply resilient to a Lambda cold start: rebuild the
+	// numeric mapping from the current group members instead of requiring the
+	// short-lived in-memory conversation state.
+	if strings.Contains(quotedLower, "¿quiénes deben pagar") || strings.Contains(quotedLower, "quienes deben pagar") {
+		shortID := shortExpenseIDPattern.FindString(quotedText)
+		if shortID == "" {
+			return false, nil
+		}
+		members, err := h.db.GetGroupMembers(ctx, chatID)
+		if err != nil || len(members) == 0 {
+			return true, h.tg.SendMessage(ctx, chatID, "❌ No pude obtener los miembros del grupo. Intentá de nuevo.")
+		}
+		options := make(map[int]int64, len(members))
+		for index, member := range members {
+			options[index+1] = member.UserID
+		}
+		return true, h.completeParticipantSplit(ctx, chatID, userID, selection, &ConversationState{
+			ExpenseShortID:     shortID,
+			ParticipantOptions: options,
+		})
 	}
 
 	return false, nil

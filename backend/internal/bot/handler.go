@@ -250,13 +250,39 @@ func isSafeWhatsAppGroupContinuation(state *ConversationState, text string) bool
 		return ok
 	case StepSelectNewExpenseAction:
 		lower := strings.ToLower(selection)
-		return lower == "1" || lower == "2" || strings.Contains(lower, "dividir") || strings.Contains(lower, "ver gasto")
+		return lower == "1" || lower == "2" || lower == "3" || strings.Contains(lower, "dividir") || strings.Contains(lower, "elegir") || strings.Contains(lower, "particip") || strings.Contains(lower, "ver gasto")
+	case StepSelectExpenseSplitMode:
+		lower := strings.ToLower(selection)
+		return lower == "1" || lower == "2" || lower == "3" || strings.Contains(lower, "entre todos") || strings.Contains(lower, "elegir") || strings.Contains(lower, "particip") || strings.Contains(lower, "ver gasto")
+	case StepSelectExpenseParticipants:
+		// A bare number list is the unambiguous, low-friction group fallback.
+		// Names can still be used by replying to the prompt (which marks the
+		// message as addressed to Splitter) or by @mentioning it. This keeps a
+		// normal sentence such as "Cecilia llega más tarde" out of the bot flow.
+		return isNumericParticipantSelection(selection)
 	case StepSelectDivideExpense, StepSelectRedivideExpense, StepSelectPaymentExpense:
 		n, err := strconv.Atoi(selection)
 		return err == nil && n > 0
 	default:
 		return false
 	}
+}
+
+func isNumericParticipantSelection(text string) bool {
+	hasNumber := false
+	for _, item := range strings.FieldsFunc(text, func(r rune) bool {
+		return r == ',' || r == ';' || r == '\n'
+	}) {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if _, err := strconv.Atoi(item); err != nil {
+			return false
+		}
+		hasNumber = true
+	}
+	return hasNumber
 }
 
 func conversationStepForLog(state *ConversationState) ConversationStep {
@@ -279,6 +305,8 @@ func (h *Handler) handleInteractiveSelection(ctx context.Context, chatID, userID
 		return h.handleMenuCallback(ctx, chatID, userID, userName, parts[1], "")
 	case "divide":
 		return h.handleDivide(ctx, chatID, userID, []string{parts[1]})
+	case "participants":
+		return h.startParticipantSelection(ctx, chatID, userID, parts[1])
 	case "redivide":
 		return h.handleRedivide(ctx, chatID, userID, []string{parts[1]})
 	case "pay":
@@ -340,6 +368,8 @@ func (h *Handler) handleCallbackQuery(ctx context.Context, query *telegram.Callb
 	case "divide":
 		_ = h.tg.AnswerCallbackQuery(ctx, query.ID, "Dividiendo...")
 		return h.handleDivide(ctx, chatID, userID, []string{shortID})
+	case "participants":
+		return h.startParticipantSelection(ctx, chatID, userID, shortID)
 	case "redivide":
 		_ = h.tg.AnswerCallbackQuery(ctx, query.ID, "Redividiendo...")
 		return h.handleRedivide(ctx, chatID, userID, []string{shortID})
