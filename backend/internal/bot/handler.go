@@ -92,17 +92,18 @@ func (h *Handler) HandleUpdate(ctx context.Context, update *telegram.Update) err
 	if fields := strings.Fields(text); len(fields) > 1 && strings.HasPrefix(fields[0], "@") && strings.HasPrefix(fields[1], "/") {
 		text = strings.Join(fields[1:], " ")
 	}
-	// Fetch the current state before applying the WhatsApp group guard. A bare
-	// "1" is an intentional response only when this exact person has just been
-	// shown a numbered selector; any other group conversation stays ignored.
+	// Fetch the current state before applying the WhatsApp group guard. Once
+	// Splitter has asked this exact person a free-text question, their next
+	// answer can be plain text; other group conversation stays ignored.
 	state := h.conv.Get(chatID, userID)
 
 	// In WhatsApp groups, never treat ordinary group conversation as bot input.
 	// A person must @mention Splitter, reply to one of its messages (the
 	// sidecar marks that as IsMentioned), select an actual interactive action,
-	// or submit an unambiguous selection for their active menu. Telegram keeps
-	// its established command behavior because it has native command routing.
+	// or answer a pending question for their own active flow. Telegram keeps its
+	// established command behavior because it has native command routing.
 	if msg.IsWhatsAppWeb && msg.Chat.Type == "group" && !msg.IsMentioned && !isSafeWhatsAppGroupContinuation(state, text) {
+		h.logger.Printf("WA Web group message ignored: chat=%d sender=%d mentioned=false active_step=%d reason=not_addressed", chatID, userID, conversationStepForLog(state))
 		return nil
 	}
 	// In WhatsApp groups, a reply can target an older bot message while a newer
@@ -231,10 +232,10 @@ func (h *Handler) HandleUpdate(ctx context.Context, update *telegram.Update) err
 	}
 }
 
-// isSafeWhatsAppGroupContinuation deliberately accepts only short, structured
-// choices while a person has an active selector. Free-form text still needs a
-// mention or a reply to a Splitter message, so everyday group chat cannot be
-// mistaken for an expense input.
+// isSafeWhatsAppGroupContinuation accepts a person's next free-text answer
+// only when Splitter is actively waiting for that specific field. Selectors
+// remain strict, so an unrelated "1" or chat message never triggers a menu
+// action just because a menu happened to be shown earlier.
 func isSafeWhatsAppGroupContinuation(state *ConversationState, text string) bool {
 	if state == nil {
 		return false
@@ -242,6 +243,8 @@ func isSafeWhatsAppGroupContinuation(state *ConversationState, text string) bool
 
 	selection := strings.TrimSpace(text)
 	switch state.Step {
+	case StepNewExpenseDescription, StepNewExpenseAmount, StepNewExpensePayer, StepExpenseSummary:
+		return selection != ""
 	case StepSelectMenuOption:
 		_, ok := resolveMenuOptionText(selection)
 		return ok
@@ -254,6 +257,13 @@ func isSafeWhatsAppGroupContinuation(state *ConversationState, text string) bool
 	default:
 		return false
 	}
+}
+
+func conversationStepForLog(state *ConversationState) ConversationStep {
+	if state == nil {
+		return StepNone
+	}
+	return state.Step
 }
 
 // handleInteractiveSelection routes WhatsApp list/button selections. Telegram

@@ -135,6 +135,7 @@ client.on('message', async (msg) => {
     const isMentioned = isGroup && (
       await messageMentionsClient(msg) || replyContext.isReplyToClient
     );
+    const inboundText = normalizeInboundText(msg.body || '', isMentioned);
 
     const payload = {
       chat_id: chatId,
@@ -147,7 +148,7 @@ client.on('message', async (msg) => {
       sender_id: senderId,
       sender_jid: senderJid,
       from_name: displayName,
-      text: msg.body || '',
+      text: inboundText,
       quoted_text: replyContext.quotedText,
       interactive_id: interactiveID,
       is_mentioned: isMentioned,
@@ -155,6 +156,19 @@ client.on('message', async (msg) => {
       timestamp: msg.timestamp || Math.floor(Date.now() / 1000),
     };
 
+    // Intentionally log interaction metadata only. Message text never belongs
+    // in Railway logs because it can contain private expense information.
+    console.log('Inbound WhatsApp message:', {
+      messageId: payload.message_id,
+      chatId: payload.chat_id,
+      chatType: payload.chat_type,
+      senderId: payload.sender_id,
+      mentioned: payload.is_mentioned,
+      replyToBot: replyContext.isReplyToClient,
+      hasQuote: Boolean(payload.quoted_text),
+      interactive: Boolean(payload.interactive_id),
+      textLength: payload.text.length,
+    });
     await postToBackend(payload);
   } catch (e) {
     console.error('Error handling inbound message:', e);
@@ -320,6 +334,32 @@ function getInteractiveID(msg) {
     msg.rawData?.buttonsResponseMessage?.selectedButtonId,
   ];
   return candidates.find((value) => typeof value === 'string' && value.length > 0) || '';
+}
+
+// WhatsApp Web serializes a visible @Splitter mention as the account's
+// internal numeric identifier (often an @lid). The number is transport data,
+// not part of what the person said, so remove it before the bot parses a
+// description or amount.
+function normalizeInboundText(text, isMentioned) {
+  let normalized = String(text || '');
+  const ownRawID = jidToRawID(client.info?.wid?._serialized);
+  if (ownRawID) {
+    const ownMention = new RegExp(`(^|\\s)@${escapeRegex(ownRawID)}(?=\\s|$)`, 'g');
+    normalized = normalized.replace(ownMention, '$1');
+  }
+
+  // Some WhatsApp builds expose the linked-device identifier in the message
+  // body even when client.info has the phone JID. Once the sidecar has already
+  // established that Splitter was mentioned, a leading numeric @mention is
+  // safely the bot mention rather than user content.
+  if (isMentioned) {
+    normalized = normalized.replace(/^\s*@\d+(?=\s|$)\s*/, '');
+  }
+  return normalized.trim();
+}
+
+function escapeRegex(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 async function messageMentionsClient(msg) {

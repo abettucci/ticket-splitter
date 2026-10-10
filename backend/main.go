@@ -399,6 +399,17 @@ func handleWaWebInbound(ctx context.Context, request events.APIGatewayProxyReque
 			},
 		},
 	}
+	logger.Printf(
+		"[%s] WA Web inbound: chat=%d type=%s sender=%d mentioned=%t quoted=%t interactive=%t text_length=%d",
+		requestID,
+		chatID,
+		chatType,
+		senderID,
+		payload.IsMentioned,
+		payload.QuotedText != "",
+		payload.InteractiveID != "",
+		len(text),
+	)
 
 	if err := waWebBotHandler.HandleUpdate(ctx, update); err != nil {
 		logger.Printf("[%s] WA Web inbound: handler error: %v", requestID, err)

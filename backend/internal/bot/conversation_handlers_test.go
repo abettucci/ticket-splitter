@@ -33,7 +33,8 @@ func TestSafeWhatsAppGroupContinuationOnlyAllowsStructuredSelections(t *testing.
 		{name: "menu number", state: &ConversationState{Step: StepSelectMenuOption}, text: "1", want: true},
 		{name: "menu label with typo", state: &ConversationState{Step: StepSelectMenuOption}, text: "ver gastso", want: true},
 		{name: "divide selector number", state: &ConversationState{Step: StepSelectDivideExpense}, text: "2", want: true},
-		{name: "free expense description is not accepted", state: &ConversationState{Step: StepNewExpenseDescription}, text: "nafta y seguro", want: false},
+		{name: "free expense description is accepted", state: &ConversationState{Step: StepNewExpenseDescription}, text: "nafta y seguro", want: true},
+		{name: "free expense amount is accepted", state: &ConversationState{Step: StepNewExpenseAmount}, text: "180500", want: true},
 		{name: "ordinary chat is not accepted", state: &ConversationState{Step: StepSelectMenuOption}, text: "che llego en diez", want: false},
 		{name: "no active flow", state: nil, text: "1", want: false},
 	}
