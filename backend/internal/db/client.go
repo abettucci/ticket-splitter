@@ -153,6 +153,25 @@ type BotCommand struct {
 	CreatedAt time.Time              `dynamodbav:"created_at"`
 }
 
+// Conversation stores a short-lived interactive bot flow. It shares the group
+// partition with the group metadata and expires quickly, so any Lambda worker
+// can resume the exact same user flow after a cold start.
+type Conversation struct {
+	PK                     string            `dynamodbav:"PK"` // GROUP#<chat_id>
+	SK                     string            `dynamodbav:"SK"` // CONVERSATION#<user_id>
+	ChatID                 int64             `dynamodbav:"chat_id"`
+	UserID                 int64             `dynamodbav:"user_id"`
+	Step                   int               `dynamodbav:"step"`
+	Description            string            `dynamodbav:"description,omitempty"`
+	Amount                 float64           `dynamodbav:"amount,omitempty"`
+	ExpenseShortID         string            `dynamodbav:"expense_short_id,omitempty"`
+	DivideOptions          map[string]string `dynamodbav:"divide_options,omitempty"`
+	ParticipantOptions     map[string]int64  `dynamodbav:"participant_options,omitempty"`
+	SelectedParticipantIDs []int64           `dynamodbav:"selected_participant_ids,omitempty"`
+	ExpiresAt              time.Time         `dynamodbav:"expires_at"`
+	TTL                    int64             `dynamodbav:"ttl"`
+}
+
 // Reminder representa un recordatorio de pago
 type Reminder struct {
 	PK                 string  `dynamodbav:"PK"` // USER#<user_id>
@@ -211,6 +230,73 @@ func NewClient(ctx context.Context) (*Client, error) {
 		db:        dynamodb.NewFromConfig(cfg),
 		tableName: tableName,
 	}, nil
+}
+
+// SaveConversation persists a short interactive flow. The group key keeps all
+// flows for a chat colocated logically, while the user suffix isolates each
+// person's answers from the rest of the group.
+func (c *Client) SaveConversation(ctx context.Context, conversation *Conversation) error {
+	conversation.PK = fmt.Sprintf("GROUP#%d", conversation.ChatID)
+	conversation.SK = fmt.Sprintf("CONVERSATION#%d", conversation.UserID)
+	conversation.TTL = conversation.ExpiresAt.Unix()
+
+	item, err := attributevalue.MarshalMap(conversation)
+	if err != nil {
+		return fmt.Errorf("marshal conversation: %w", err)
+	}
+	_, err = c.db.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: aws.String(c.tableName),
+		Item:      item,
+	})
+	if err != nil {
+		return fmt.Errorf("save conversation: %w", err)
+	}
+	return nil
+}
+
+// GetConversation loads the active flow using a strongly consistent read so a
+// reply can land on a different Lambda instance without losing its context.
+func (c *Client) GetConversation(ctx context.Context, chatID, userID int64) (*Conversation, error) {
+	result, err := c.db.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName:      aws.String(c.tableName),
+		ConsistentRead: aws.Bool(true),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: fmt.Sprintf("GROUP#%d", chatID)},
+			"SK": &types.AttributeValueMemberS{Value: fmt.Sprintf("CONVERSATION#%d", userID)},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get conversation: %w", err)
+	}
+	if len(result.Item) == 0 {
+		return nil, nil
+	}
+
+	var conversation Conversation
+	if err := attributevalue.UnmarshalMap(result.Item, &conversation); err != nil {
+		return nil, fmt.Errorf("unmarshal conversation: %w", err)
+	}
+	if time.Now().After(conversation.ExpiresAt) {
+		_ = c.DeleteConversation(ctx, chatID, userID)
+		return nil, nil
+	}
+	return &conversation, nil
+}
+
+// DeleteConversation clears the transient state once a flow completes or is
+// cancelled. Expiry still protects against abandoned flows if this call fails.
+func (c *Client) DeleteConversation(ctx context.Context, chatID, userID int64) error {
+	_, err := c.db.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(c.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: fmt.Sprintf("GROUP#%d", chatID)},
+			"SK": &types.AttributeValueMemberS{Value: fmt.Sprintf("CONVERSATION#%d", userID)},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("delete conversation: %w", err)
+	}
+	return nil
 }
 
 // ============================================
@@ -727,6 +813,106 @@ func (c *Client) CreateSplits(ctx context.Context, expense *Expense, members []M
 	})
 
 	return err
+}
+
+// ReplaceSplits atomically swaps every share of an already divided expense.
+// A correction must never leave a half-reset expense if a write fails midway.
+func (c *Client) ReplaceSplits(ctx context.Context, expense *Expense, members []Member) error {
+	if len(members) == 0 {
+		return fmt.Errorf("no members to split")
+	}
+
+	previousSplits, err := c.GetExpenseSplits(ctx, expense.ID)
+	if err != nil {
+		return fmt.Errorf("get existing splits: %w", err)
+	}
+
+	selectedIDs := make(map[int64]struct{}, len(members))
+	for _, member := range members {
+		if _, duplicate := selectedIDs[member.UserID]; duplicate {
+			return fmt.Errorf("duplicate member %d", member.UserID)
+		}
+		selectedIDs[member.UserID] = struct{}{}
+	}
+
+	retainedCount := 0
+	for _, previous := range previousSplits {
+		if _, retained := selectedIDs[previous.UserID]; retained {
+			retainedCount++
+		}
+	}
+	// One Put per selected split, one Delete per removed split, and one Update
+	// for the expense. DynamoDB allows at most 100 transaction actions.
+	if len(members)+(len(previousSplits)-retainedCount)+1 > 100 {
+		return fmt.Errorf("too many participants to replace in one transaction")
+	}
+
+	now := time.Now()
+	amountPerPerson := expense.TotalAmount / float64(len(members))
+	operations := make([]types.TransactWriteItem, 0, len(previousSplits)+len(members)+1)
+	for _, previous := range previousSplits {
+		if _, retained := selectedIDs[previous.UserID]; retained {
+			continue // A Put below replaces this exact split key.
+		}
+		operations = append(operations, types.TransactWriteItem{Delete: &types.Delete{
+			TableName: aws.String(c.tableName),
+			Key: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: previous.PK},
+				"SK": &types.AttributeValueMemberS{Value: previous.SK},
+			},
+		}})
+	}
+
+	for _, member := range members {
+		split := &ExpenseSplit{
+			PK:        fmt.Sprintf("EXPENSE#%s", expense.ID),
+			SK:        fmt.Sprintf("SPLIT#%d", member.UserID),
+			ID:        uuid.New().String(),
+			ExpenseID: expense.ID,
+			ChatID:    expense.ChatID,
+			UserID:    member.UserID,
+			UserName:  member.DisplayName,
+			Amount:    amountPerPerson,
+			IsPaid:    member.UserID == expense.CreatedBy,
+			CreatedAt: now,
+			GSI1PK:    fmt.Sprintf("USER#%d", member.UserID),
+			GSI1SK:    fmt.Sprintf("SPLIT#%s", expense.ID),
+		}
+		if split.IsPaid {
+			split.PaidAt = now
+		}
+		item, err := attributevalue.MarshalMap(split)
+		if err != nil {
+			return fmt.Errorf("marshal replacement split: %w", err)
+		}
+		operations = append(operations, types.TransactWriteItem{Put: &types.Put{
+			TableName: aws.String(c.tableName),
+			Item:      item,
+		}})
+	}
+
+	operations = append(operations, types.TransactWriteItem{Update: &types.Update{
+		TableName: aws.String(c.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: expense.PK},
+			"SK": &types.AttributeValueMemberS{Value: expense.SK},
+		},
+		UpdateExpression: aws.String("SET is_divided = :divided, updated_at = :now"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":divided": &types.AttributeValueMemberBOOL{Value: true},
+			":now":     &types.AttributeValueMemberS{Value: now.Format(time.RFC3339)},
+		},
+	}})
+
+	if len(operations) > 100 {
+		return fmt.Errorf("too many split replacement operations")
+	}
+	_, err = c.db.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: operations})
+	if err != nil {
+		return fmt.Errorf("replace splits transaction: %w", err)
+	}
+	expense.IsDivided = true
+	return nil
 }
 
 // CreateSplitsWithCustomAmounts crea divisiones con montos personalizados

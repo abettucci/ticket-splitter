@@ -283,95 +283,46 @@ Uso: /editar [id] [campo] [nuevo_valor]
 // handleRedivide permite redividir un gasto ya dividido con nuevos participantes
 func (h *Handler) handleRedivide(ctx context.Context, chatID, userID int64, args []string) error {
 	if len(args) < 1 {
-		return h.tg.SendMessage(ctx, chatID, `❌ <b>Formato incorrecto</b>
+		return h.handleMenuRedivide(ctx, chatID, userID)
+	}
+	return h.showRedivideMode(ctx, chatID, userID, args[0])
+}
 
-Uso: /redividir [id] [@user1 @user2...]
-
-<b>Ejemplos:</b>
-• /redividir a1b2c3
-  <i>(Redivide entre todos los miembros del grupo)</i>
-
-• /redividir a1b2c3 @ana @flor @pauli
-  <i>(Redivide solo entre los usuarios seleccionados)</i>
-
-💡 Esto elimina la división anterior y crea una nueva.`)
+// applyRedivision replaces an existing division after the user saw and
+// confirmed the exact new debtors. Previous shares and paid markers belong to
+// the old distribution and are intentionally replaced as one correction.
+func (h *Handler) applyRedivision(ctx context.Context, chatID, userID int64, expense *db.Expense, selectedMembers []db.Member) error {
+	if len(selectedMembers) == 0 {
+		return h.tg.SendMessage(ctx, chatID, "❌ Elegí al menos una persona que deba pagar.")
+	}
+	if !expense.IsDivided {
+		return h.tg.SendMessage(ctx, chatID, "⚠️ Este gasto todavía no fue dividido. Elegí «Dividir gasto» para repartirlo por primera vez.")
 	}
 
-	shortID := args[0]
-	expense, err := h.db.GetExpenseByShortID(ctx, chatID, shortID)
-	if err != nil {
-		return h.tg.SendMessage(ctx, chatID, "❌ Gasto no encontrado")
-	}
-
-	// Resetear la división existente (eliminar splits y marcar como no dividido)
-	if expense.IsDivided {
-		h.logger.Printf("Resetting division for expense ID: %s, PK: %s, SK: %s", expense.ID, expense.PK, expense.SK)
-		err = h.db.ResetExpenseDivision(ctx, expense)
-		if err != nil {
-			h.logger.Printf("Error resetting expense division for %s: %v", expense.ID, err)
-			return h.tg.SendMessage(ctx, chatID, fmt.Sprintf("❌ Error al resetear la división anterior: %v", err))
-		}
-		expense.IsDivided = false
-	}
-
-	// Obtener miembros del grupo
-	allMembers, err := h.db.GetGroupMembers(ctx, chatID)
-	if err != nil || len(allMembers) == 0 {
-		return h.tg.SendMessage(ctx, chatID, "❌ No hay miembros registrados en el grupo.")
-	}
-
-	var selectedMembers []db.Member
-
-	// Si hay usuarios especificados, usar solo esos
-	if len(args) > 1 {
-		memberMap := make(map[string]*db.Member)
-		for i := range allMembers {
-			if allMembers[i].Username != "" {
-				memberMap[strings.ToLower(allMembers[i].Username)] = &allMembers[i]
-			}
-		}
-
-		for i := 1; i < len(args); i++ {
-			username := strings.TrimPrefix(args[i], "@")
-			username = strings.ToLower(username)
-
-			if member, ok := memberMap[username]; ok {
-				selectedMembers = append(selectedMembers, *member)
-			}
-		}
-
-		if len(selectedMembers) == 0 {
-			return h.tg.SendMessage(ctx, chatID, "❌ No se encontraron miembros válidos. Verifica los usernames.")
-		}
-	} else {
-		// Sin usuarios especificados, usar todos los miembros
-		selectedMembers = allMembers
-	}
-
-	// Crear nuevas divisiones
-	err = h.db.CreateSplits(ctx, expense, selectedMembers)
-	if err != nil {
-		h.logger.Printf("Error creating splits: %v", err)
-		return h.tg.SendMessage(ctx, chatID, "❌ Error al crear la nueva división")
+	h.logger.Printf("Replacing division for expense ID: %s", expense.ID)
+	if err := h.db.ReplaceSplits(ctx, expense, selectedMembers); err != nil {
+		h.logger.Printf("Error creating replacement splits: %v", err)
+		return h.tg.SendMessage(ctx, chatID, "❌ No pude reemplazar la división. El gasto y sus pagos quedaron sin cambios.")
 	}
 
 	amountPerPerson := expense.TotalAmount / float64(len(selectedMembers))
-
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("🔄 <b>Gasto redividido: %s</b>\n\n", telegram.EscapeHTML(expense.Description)))
-	sb.WriteString(fmt.Sprintf("📊 Total: %s\n", telegram.FormatMoney(expense.TotalAmount)))
-	sb.WriteString(fmt.Sprintf("👥 Participantes: %d\n", len(selectedMembers)))
+	sb.WriteString(fmt.Sprintf("🔄 <b>Gasto corregido: %s</b>\n\n", telegram.EscapeHTML(expense.Description)))
+	sb.WriteString(fmt.Sprintf("👤 Pagó: %s\n", telegram.EscapeHTML(expense.CreatorName)))
+	sb.WriteString(fmt.Sprintf("👥 Nuevos deudores: %d\n", len(selectedMembers)))
 	sb.WriteString(fmt.Sprintf("💵 Por persona: <b>%s</b>\n\n", telegram.FormatMoney(amountPerPerson)))
 	sb.WriteString("<b>Nueva división:</b>\n")
-
-	for _, m := range selectedMembers {
+	for _, member := range selectedMembers {
 		status := "⏳ Pendiente"
-		if m.UserID == expense.CreatedBy {
-			status = "✅ Pagó (creador)"
+		if member.UserID == expense.CreatedBy {
+			status = "✅ Ya pagó"
 		}
-		sb.WriteString(fmt.Sprintf("• %s: %s\n", telegram.EscapeHTML(m.DisplayName), status))
+		fmt.Fprintf(&sb, "• %s: %s\n", telegram.EscapeHTML(member.DisplayName), status)
 	}
-
+	h.logChangelog(chatID, userID, "", "expense", expense.ID[:8], expense.Description, "redivided", map[string]string{
+		"participantes": fmt.Sprintf("%d", len(selectedMembers)),
+		"por persona":   telegram.FormatMoney(amountPerPerson),
+	})
 	return h.tg.SendMessage(ctx, chatID, sb.String())
 }
 

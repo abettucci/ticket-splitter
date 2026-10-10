@@ -39,7 +39,7 @@ func NewHandler(dbClient *db.Client, messenger Messenger, logger *log.Logger, re
 		db:              dbClient,
 		tg:              messenger,
 		logger:          logger,
-		conv:            NewConversationManager(),
+		conv:            NewConversationManager(dbClient),
 		reminderChannel: reminderChannel,
 	}
 }
@@ -260,6 +260,14 @@ func isSafeWhatsAppGroupContinuation(state *ConversationState, text string) bool
 		// message as addressed to Splitter) or by @mentioning it. This keeps a
 		// normal sentence such as "Cecilia llega más tarde" out of the bot flow.
 		return isNumericParticipantSelection(selection)
+	case StepSelectRedivideMode:
+		lower := strings.ToLower(selection)
+		return lower == "1" || lower == "2" || lower == "3" || strings.Contains(lower, "entre todos") || strings.Contains(lower, "elegir") || strings.Contains(lower, "particip") || strings.Contains(lower, "cancel")
+	case StepSelectRedivideParticipants:
+		return isNumericParticipantSelection(selection)
+	case StepConfirmRedivide:
+		lower := strings.ToLower(selection)
+		return lower == "1" || lower == "2" || strings.Contains(lower, "confirm") || strings.Contains(lower, "cancel") || lower == "si" || lower == "sí"
 	case StepSelectDivideExpense, StepSelectRedivideExpense, StepSelectPaymentExpense:
 		n, err := strconv.Atoi(selection)
 		return err == nil && n > 0
@@ -308,7 +316,16 @@ func (h *Handler) handleInteractiveSelection(ctx context.Context, chatID, userID
 	case "participants":
 		return h.startParticipantSelection(ctx, chatID, userID, parts[1])
 	case "redivide":
-		return h.handleRedivide(ctx, chatID, userID, []string{parts[1]})
+		return h.showRedivideMode(ctx, chatID, userID, parts[1])
+	case "redivide_all":
+		return h.prepareRedivideAll(ctx, chatID, userID, parts[1])
+	case "redivide_participants":
+		return h.startRedivideParticipantSelection(ctx, chatID, userID, parts[1])
+	case "redivide_confirm":
+		return h.confirmRedivision(ctx, chatID, userID, parts[1])
+	case "redivide_cancel":
+		h.conv.Clear(chatID, userID)
+		return h.tg.SendMessage(ctx, chatID, "✖️ Corrección cancelada. No modifiqué el gasto ni sus pagos.")
 	case "pay":
 		return h.handlePayByShortID(ctx, chatID, userID, parts[1])
 	case "conv_payer":
@@ -371,8 +388,16 @@ func (h *Handler) handleCallbackQuery(ctx context.Context, query *telegram.Callb
 	case "participants":
 		return h.startParticipantSelection(ctx, chatID, userID, shortID)
 	case "redivide":
-		_ = h.tg.AnswerCallbackQuery(ctx, query.ID, "Redividiendo...")
-		return h.handleRedivide(ctx, chatID, userID, []string{shortID})
+		return h.showRedivideMode(ctx, chatID, userID, shortID)
+	case "redivide_all":
+		return h.prepareRedivideAll(ctx, chatID, userID, shortID)
+	case "redivide_participants":
+		return h.startRedivideParticipantSelection(ctx, chatID, userID, shortID)
+	case "redivide_confirm":
+		return h.confirmRedivision(ctx, chatID, userID, shortID)
+	case "redivide_cancel":
+		h.conv.Clear(chatID, userID)
+		return h.tg.SendMessage(ctx, chatID, "✖️ Corrección cancelada. No modifiqué el gasto ni sus pagos.")
 	case "pay":
 		return h.handlePayByShortID(ctx, chatID, userID, shortID)
 	case "conv_payer":

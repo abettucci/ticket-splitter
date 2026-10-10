@@ -185,6 +185,165 @@ func (h *Handler) handleMenuRedivide(ctx context.Context, chatID, userID int64) 
 	})
 }
 
+func (h *Handler) showRedivideMode(ctx context.Context, chatID, userID int64, shortID string) error {
+	expense, err := h.db.GetExpenseByShortID(ctx, chatID, shortID)
+	if err != nil {
+		return h.tg.SendMessage(ctx, chatID, "❌ Gasto no encontrado. Pedí «ver gastos» para revisarlo.")
+	}
+	if !expense.IsDivided {
+		return h.tg.SendMessage(ctx, chatID, "⚠️ Este gasto todavía no fue dividido. Elegí «Dividir gasto» para repartirlo por primera vez.")
+	}
+
+	shortID = expense.ID[:8]
+	h.conv.Set(chatID, userID, &ConversationState{Step: StepSelectRedivideMode, ExpenseShortID: shortID})
+	keyboard := telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{
+		{
+			{Text: "➗ Entre todos", CallbackData: fmt.Sprintf("redivide_all:%s", shortID)},
+			{Text: "👥 Elegir participantes", CallbackData: fmt.Sprintf("redivide_participants:%s", shortID)},
+		},
+		{{Text: "✖️ Cancelar", CallbackData: fmt.Sprintf("redivide_cancel:%s", shortID)}},
+	}}
+
+	return h.tg.SendMessageWithOptions(ctx, &telegram.SendMessageRequest{
+		ChatID: chatID,
+		Text: fmt.Sprintf(
+			"🔄 <b>¿Cómo querés corregir %s?</b>\n"+
+				"🆔 ID: <code>%s</code>\n\n"+
+				"Primero te voy a mostrar el cambio para confirmarlo.\n\n"+
+				"💡 Si lo pagó una persona por otra, elegí participantes y dejá afuera a quien pagó.",
+			telegram.EscapeHTML(expense.Description), shortID,
+		),
+		ParseMode:   "HTML",
+		ReplyMarkup: keyboard,
+	})
+}
+
+func (h *Handler) prepareRedivideAll(ctx context.Context, chatID, userID int64, shortID string) error {
+	expense, err := h.db.GetExpenseByShortID(ctx, chatID, shortID)
+	if err != nil || !expense.IsDivided {
+		return h.showRedivideMode(ctx, chatID, userID, shortID)
+	}
+	members, err := h.db.GetGroupMembers(ctx, chatID)
+	if err != nil || len(members) == 0 {
+		return h.tg.SendMessage(ctx, chatID, "❌ No hay miembros disponibles para redividir.")
+	}
+	return h.showRedivisionConfirmation(ctx, chatID, userID, expense, members)
+}
+
+func (h *Handler) startRedivideParticipantSelection(ctx context.Context, chatID, userID int64, shortID string) error {
+	expense, err := h.db.GetExpenseByShortID(ctx, chatID, shortID)
+	if err != nil || !expense.IsDivided {
+		return h.showRedivideMode(ctx, chatID, userID, shortID)
+	}
+	members, err := h.db.GetGroupMembers(ctx, chatID)
+	if err != nil || len(members) == 0 {
+		return h.tg.SendMessage(ctx, chatID, "❌ No hay miembros disponibles para elegir.")
+	}
+
+	options := make(map[int]int64, len(members))
+	var builder strings.Builder
+	builder.WriteString(fmt.Sprintf("👥 <b>¿Quiénes deben asumir %s?</b>\n\n", telegram.EscapeHTML(expense.Description)))
+	builder.WriteString(fmt.Sprintf("🆔 ID: <code>%s</code>\n", expense.ID[:8]))
+	builder.WriteString(fmt.Sprintf("<b>%s</b> pagó el total. Elegí a los nuevos deudores; puede quedar afuera.\n\n", telegram.EscapeHTML(expense.CreatorName)))
+	builder.WriteString("Respondé con números separados por coma. Si preferís nombres, respondé a este mensaje.\nEjemplo: <b>1, 3</b>\n\n")
+	for index, member := range members {
+		n := index + 1
+		options[n] = member.UserID
+		fmt.Fprintf(&builder, "%d. %s\n", n, telegram.EscapeHTML(member.DisplayName))
+	}
+
+	h.conv.Set(chatID, userID, &ConversationState{
+		Step:               StepSelectRedivideParticipants,
+		ExpenseShortID:     expense.ID[:8],
+		ParticipantOptions: options,
+	})
+	return h.tg.SendMessage(ctx, chatID, builder.String())
+}
+
+func (h *Handler) completeRedivideParticipants(ctx context.Context, chatID, userID int64, text string, state *ConversationState) error {
+	members, err := h.db.GetGroupMembers(ctx, chatID)
+	if err != nil {
+		return h.tg.SendMessage(ctx, chatID, "❌ No pude obtener los miembros del grupo. Intentá de nuevo.")
+	}
+	selectedMembers, invalid := selectSplitParticipants(text, state.ParticipantOptions, members)
+	if invalid != "" {
+		return h.tg.SendMessage(ctx, chatID, fmt.Sprintf("❌ No entendí «%s». Respondé con números como <b>1, 3</b> o nombres de la lista.", telegram.EscapeHTML(invalid)))
+	}
+	if len(selectedMembers) == 0 {
+		return h.tg.SendMessage(ctx, chatID, "❌ Elegí al menos una persona que deba pagar.")
+	}
+	expense, err := h.db.GetExpenseByShortID(ctx, chatID, state.ExpenseShortID)
+	if err != nil || !expense.IsDivided {
+		return h.showRedivideMode(ctx, chatID, userID, state.ExpenseShortID)
+	}
+	return h.showRedivisionConfirmation(ctx, chatID, userID, expense, selectedMembers)
+}
+
+func (h *Handler) showRedivisionConfirmation(ctx context.Context, chatID, userID int64, expense *db.Expense, selectedMembers []db.Member) error {
+	selectedIDs := make([]int64, 0, len(selectedMembers))
+	names := make([]string, 0, len(selectedMembers))
+	for _, member := range selectedMembers {
+		selectedIDs = append(selectedIDs, member.UserID)
+		names = append(names, telegram.EscapeHTML(member.DisplayName))
+	}
+	amountPerPerson := expense.TotalAmount / float64(len(selectedMembers))
+	shortID := expense.ID[:8]
+	h.conv.Set(chatID, userID, &ConversationState{
+		Step:                   StepConfirmRedivide,
+		ExpenseShortID:         shortID,
+		SelectedParticipantIDs: selectedIDs,
+	})
+	keyboard := telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{{
+		{Text: "✅ Confirmar corrección", CallbackData: fmt.Sprintf("redivide_confirm:%s", shortID)},
+		{Text: "✖️ Cancelar", CallbackData: fmt.Sprintf("redivide_cancel:%s", shortID)},
+	}}}
+
+	return h.tg.SendMessageWithOptions(ctx, &telegram.SendMessageRequest{
+		ChatID: chatID,
+		Text: fmt.Sprintf(
+			"🔎 <b>Confirmá la corrección</b>\n\n"+
+				"📝 %s\n👤 Pagó: %s\n👥 Nuevos deudores: %s\n💵 Por persona: <b>%s</b>\n\n"+
+				"⚠️ Esto reemplazará las cuotas y estados de pago actuales de este gasto.",
+			telegram.EscapeHTML(expense.Description),
+			telegram.EscapeHTML(expense.CreatorName),
+			strings.Join(names, ", "),
+			telegram.FormatMoney(amountPerPerson),
+		),
+		ParseMode:   "HTML",
+		ReplyMarkup: keyboard,
+	})
+}
+
+func (h *Handler) confirmRedivision(ctx context.Context, chatID, userID int64, shortID string) error {
+	state := h.conv.Get(chatID, userID)
+	if state == nil || state.Step != StepConfirmRedivide || state.ExpenseShortID != shortID || len(state.SelectedParticipantIDs) == 0 {
+		return h.tg.SendMessage(ctx, chatID, "⚠️ La confirmación venció. Elegí «Redividir» de nuevo; no modifiqué el gasto.")
+	}
+	expense, err := h.db.GetExpenseByShortID(ctx, chatID, shortID)
+	if err != nil || !expense.IsDivided {
+		return h.tg.SendMessage(ctx, chatID, "⚠️ Este gasto ya no tiene una división para corregir.")
+	}
+	members, err := h.db.GetGroupMembers(ctx, chatID)
+	if err != nil {
+		return h.tg.SendMessage(ctx, chatID, "❌ No pude obtener los miembros del grupo. No modifiqué el gasto.")
+	}
+	selectedSet := make(map[int64]struct{}, len(state.SelectedParticipantIDs))
+	for _, userID := range state.SelectedParticipantIDs {
+		selectedSet[userID] = struct{}{}
+	}
+	selectedMembers := make([]db.Member, 0, len(selectedSet))
+	for _, member := range members {
+		if _, ok := selectedSet[member.UserID]; ok {
+			selectedMembers = append(selectedMembers, member)
+		}
+	}
+	if len(selectedMembers) != len(selectedSet) {
+		return h.tg.SendMessage(ctx, chatID, "⚠️ Cambiaron los miembros del grupo. Elegí «Redividir» de nuevo para revisar la corrección.")
+	}
+	h.conv.Clear(chatID, userID)
+	return h.applyRedivision(ctx, chatID, userID, expense, selectedMembers)
+}
+
 // handleMenuDivide muestra los gastos pendientes de dividir como botones clickeables.
 // También guarda estado de conversación para que en WhatsApp el usuario pueda responder con un número.
 func (h *Handler) handleMenuDivide(ctx context.Context, chatID int64, userID ...int64) error {
@@ -539,11 +698,40 @@ func (h *Handler) handleConversationStep(ctx context.Context, chatID, userID int
 		h.conv.Clear(chatID, userID)
 		if n, err := strconv.Atoi(strings.TrimSpace(text)); err == nil {
 			if shortID, ok := state.DivideOptions[n]; ok {
-				return h.handleRedivide(ctx, chatID, userID, []string{shortID})
+				return h.showRedivideMode(ctx, chatID, userID, shortID)
 			}
 			return h.tg.SendMessage(ctx, chatID, fmt.Sprintf("❌ Opción %d no válida. Pedí «redividir» para ver la lista de nuevo.", n))
 		}
-		return h.handleRedivide(ctx, chatID, userID, []string{strings.TrimSpace(text)})
+		return h.showRedivideMode(ctx, chatID, userID, strings.TrimSpace(text))
+
+	case StepSelectRedivideMode:
+		lower := strings.ToLower(strings.TrimSpace(text))
+		switch {
+		case lower == "1" || strings.Contains(lower, "entre todos"):
+			return h.prepareRedivideAll(ctx, chatID, userID, state.ExpenseShortID)
+		case lower == "2" || strings.Contains(lower, "elegir") || strings.Contains(lower, "particip"):
+			return h.startRedivideParticipantSelection(ctx, chatID, userID, state.ExpenseShortID)
+		case lower == "3" || strings.Contains(lower, "cancel"):
+			h.conv.Clear(chatID, userID)
+			return h.tg.SendMessage(ctx, chatID, "✖️ Corrección cancelada. No modifiqué el gasto ni sus pagos.")
+		default:
+			return h.tg.SendMessage(ctx, chatID, "❌ Elegí 1 para redividir entre todos, 2 para elegir participantes o 3 para cancelar.")
+		}
+
+	case StepSelectRedivideParticipants:
+		return h.completeRedivideParticipants(ctx, chatID, userID, text, state)
+
+	case StepConfirmRedivide:
+		lower := strings.ToLower(strings.TrimSpace(text))
+		switch {
+		case lower == "1" || strings.Contains(lower, "confirm") || strings.Contains(lower, "sí") || strings.Contains(lower, "si"):
+			return h.confirmRedivision(ctx, chatID, userID, state.ExpenseShortID)
+		case lower == "2" || strings.Contains(lower, "cancel"):
+			h.conv.Clear(chatID, userID)
+			return h.tg.SendMessage(ctx, chatID, "✖️ Corrección cancelada. No modifiqué el gasto ni sus pagos.")
+		default:
+			return h.tg.SendMessage(ctx, chatID, "❌ Respondé 1 para confirmar o 2 para cancelar.")
+		}
 
 	case StepSelectPaymentExpense:
 		if n, err := strconv.Atoi(strings.TrimSpace(text)); err == nil {

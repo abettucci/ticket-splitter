@@ -2,6 +2,7 @@ package bot
 
 import (
 	"testing"
+	"time"
 
 	"github.com/abettucci/group-split-bot/internal/db"
 )
@@ -39,6 +40,8 @@ func TestSafeWhatsAppGroupContinuationOnlyAllowsStructuredSelections(t *testing.
 		{name: "divide selector number", state: &ConversationState{Step: StepSelectDivideExpense}, text: "2", want: true},
 		{name: "participant selector numeric list", state: &ConversationState{Step: StepSelectExpenseParticipants}, text: "1, 3", want: true},
 		{name: "participant selector ignores ordinary text", state: &ConversationState{Step: StepSelectExpenseParticipants}, text: "Cecilia llega más tarde", want: false},
+		{name: "redivide selector number", state: &ConversationState{Step: StepSelectRedivideMode}, text: "2", want: true},
+		{name: "redivide confirmation", state: &ConversationState{Step: StepConfirmRedivide}, text: "confirmar", want: true},
 		{name: "free expense description is accepted", state: &ConversationState{Step: StepNewExpenseDescription}, text: "nafta y seguro", want: true},
 		{name: "free expense amount is accepted", state: &ConversationState{Step: StepNewExpenseAmount}, text: "180500", want: true},
 		{name: "ordinary chat is not accepted", state: &ConversationState{Step: StepSelectMenuOption}, text: "che llego en diez", want: false},
@@ -49,6 +52,29 @@ func TestSafeWhatsAppGroupContinuationOnlyAllowsStructuredSelections(t *testing.
 		if got := isSafeWhatsAppGroupContinuation(test.state, test.text); got != test.want {
 			t.Fatalf("%s: isSafeWhatsAppGroupContinuation(%q) = %t, want %t", test.name, test.text, got, test.want)
 		}
+	}
+}
+
+func TestConversationRecordRoundTripKeepsUserFlow(t *testing.T) {
+	expiresAt := time.Now().Add(5 * time.Minute).Round(0)
+	state := &ConversationState{
+		Step:                   StepConfirmRedivide,
+		Description:            "Regalo",
+		Amount:                 180500,
+		ExpenseShortID:         "a1b2c3d4",
+		ExpiresAt:              expiresAt,
+		DivideOptions:          map[int]string{1: "a1b2c3d4"},
+		ParticipantOptions:     map[int]int64{1: 10, 2: 20},
+		SelectedParticipantIDs: []int64{10},
+	}
+
+	record := conversationRecordFromState(500, 600, state)
+	restored := conversationStateFromRecord(record)
+	if record.PK != "" || record.SK != "" {
+		t.Fatalf("keys should be created by the storage client, got PK=%q SK=%q", record.PK, record.SK)
+	}
+	if restored.Step != StepConfirmRedivide || restored.ExpenseShortID != "a1b2c3d4" || restored.ParticipantOptions[2] != 20 || len(restored.SelectedParticipantIDs) != 1 || restored.SelectedParticipantIDs[0] != 10 {
+		t.Fatalf("conversation round trip lost state: %#v", restored)
 	}
 }
 
