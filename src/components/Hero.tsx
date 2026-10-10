@@ -43,7 +43,7 @@ export const Hero = () => {
                   Empezar a dividir
                 </Link>
               </Button>
-              <Button asChild size="lg" variant="outline" className="border-2 border-white/70 text-white hover:bg-white/10 text-lg px-8 py-6 rounded-full">
+              <Button asChild size="lg" variant="outline" className="border-2 border-white/70 !bg-transparent !text-white hover:!bg-white/10 hover:!text-white text-lg px-8 py-6 rounded-full">
                 <a href="#how-it-works">
                   <MessageCircle className="mr-2 h-5 w-5" />
                   Usarlo en un grupo

@@ -249,7 +249,7 @@ app.post('/send', async (req, res) => {
     const sanitized = stripHtmlForWhatsApp(String(text));
     const result = await sendBotMessage(jid, sanitized, interactive);
     const sentMessage = result.sentMessage;
-    rememberOutboundMenuContext(sentMessage, sanitized);
+    rememberOutboundBotContext(sentMessage, sanitized);
     res.json({ ok: true, interactive: result.interactive, fallback: result.fallback });
   } catch (e) {
     console.error('Send failed:', e);
@@ -343,9 +343,9 @@ async function messageMentionsClient(msg) {
   }
 }
 
-// A reply to Splitter's menu is an intentional bot interaction too. This is
-// especially important for the numbered fallback: users naturally tap Reply
-// and type "1", without writing another @mention.
+// A reply to a Splitter message is an intentional bot interaction too. This
+// includes the numbered menu fallback as well as ordinary flow prompts such
+// as "¿Cuál es la descripción del gasto?".
 async function getBotReplyContext(msg) {
   const ownJid = client.info?.wid?._serialized;
   // Group replies identify their quoted message author separately from the
@@ -357,8 +357,12 @@ async function getBotReplyContext(msg) {
 
   try {
     const quoted = await msg.getQuotedMessage();
-    const isReplyToClient = sameWhatsAppIdentity(quoted?.author || quoted?.from, ownJid);
-    const savedContext = findOutboundMenuContext(msg, quoted);
+    // `fromMe` is the most reliable signal for a quoted outbound message.
+    // In groups, recent WhatsApp Web builds can expose the group JID in
+    // `author`/`from`, which makes an identity comparison alone insufficient.
+    const isReplyToClient = quoted?.fromMe === true
+      || sameWhatsAppIdentity(quoted?.author || quoted?.from, ownJid);
+    const savedContext = findOutboundBotContext(msg, quoted);
     const quotedText = savedContext || String(quoted?.body || '');
     console.log('Quoted message context:', {
       saved: Boolean(savedContext),
@@ -379,9 +383,7 @@ async function getBotReplyContext(msg) {
   }
 }
 
-function rememberOutboundMenuContext(message, text) {
-  if (!isBotMenu(text)) return;
-
+function rememberOutboundBotContext(message, text) {
   for (const id of messageIDCandidates(message)) {
     outboundMenuContexts.set(id, { text, storedAt: Date.now() });
   }
@@ -391,9 +393,17 @@ function rememberOutboundMenuContext(message, text) {
   for (const [id, context] of outboundMenuContexts) {
     if (context.storedAt < oldestAllowed) outboundMenuContexts.delete(id);
   }
+
+  // A WhatsApp deployment normally handles a small number of conversations,
+  // but keep this cache bounded even if it sends many reminders in one day.
+  while (outboundMenuContexts.size > 1000) {
+    const oldestID = outboundMenuContexts.keys().next().value;
+    if (!oldestID) break;
+    outboundMenuContexts.delete(oldestID);
+  }
 }
 
-function findOutboundMenuContext(inboundMessage, quotedMessage) {
+function findOutboundBotContext(inboundMessage, quotedMessage) {
   const candidates = [
     inboundMessage?._data?.quotedStanzaID,
     inboundMessage?._data?.quotedMsgId,
@@ -411,13 +421,6 @@ function messageIDCandidates(message) {
   const serialized = message?.id?._serialized;
   const stanzaID = message?.id?.id;
   return [serialized, stanzaID].filter((id) => typeof id === 'string' && id.length > 0);
-}
-
-function isBotMenu(text) {
-  const normalized = String(text || '').toLowerCase();
-  return normalized.includes('¿qué querés hacer?')
-    || normalized.includes('¿qué gasto querés dividir?')
-    || (normalized.includes('gasto registrado') && normalized.includes('dividir entre todos'));
 }
 
 function sameWhatsAppIdentity(left, right) {

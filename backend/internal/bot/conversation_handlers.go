@@ -291,6 +291,12 @@ func (h *Handler) handleConversationStep(ctx context.Context, chatID, userID int
 		if handled, err := h.handleMenuNumber(ctx, chatID, userID, text); handled {
 			return err
 		}
+		if option, ok := resolveMenuOptionText(text); ok {
+			return h.runMenuAction(ctx, chatID, userID, userName, option)
+		}
+		if args, ok := naturalExpenseArgs(text); ok {
+			return h.handleNewExpense(ctx, chatID, userID, userName, args)
+		}
 		return h.tg.SendMessage(ctx, chatID, "❌ Opción no válida. Mencioná a Splitter o escribí «menu» para ver las opciones de nuevo.")
 
 	case StepNewExpenseDescription:
@@ -545,6 +551,14 @@ func (h *Handler) handleNaturalLanguage(ctx context.Context, chatID, userID int6
 	if option, ok := resolveMenuOptionText(text); ok {
 		return h.runMenuAction(ctx, chatID, userID, userName, option)
 	}
+	// A short sentence with an explicit expense verb and an amount is safe to
+	// register directly when it was addressed to Splitter. For example:
+	// "@Splitter cargué la cena 15000". In a group this function is reached
+	// only after a mention (or an intentional reply), so normal chat is never
+	// interpreted as a financial operation.
+	if args, ok := naturalExpenseArgs(text); ok {
+		return h.handleNewExpense(ctx, chatID, userID, userName, args)
+	}
 
 	type trigger struct {
 		keywords []string
@@ -652,6 +666,7 @@ var (
 	menuOptionNumberPattern = regexp.MustCompile(`(?i)^\s*(?:opci[oó]n\s*)?([0-9]{1,2})(?:[.)\s]|$)`)
 	menuMentionPattern      = regexp.MustCompile(`@[[:alnum:]_+.-]+`)
 	menuNoisePattern        = regexp.MustCompile(`[\p{P}\p{S}]+`)
+	naturalExpensePrefix    = regexp.MustCompile(`(?i)^\s*(?:yo\s+)?(?:cargu[eé]|registr[eé]|anot[eé]|agregu[eé]|sum[eé]|pag[ué]|pague)\s+(?:(?:el|la|un|una)\s+)?`)
 )
 
 type menuTextOption struct {
@@ -732,6 +747,38 @@ func normalizeMenuText(text string) string {
 	text = replacer.Replace(text)
 	text = menuNoisePattern.ReplaceAllString(text, " ")
 	return strings.Join(strings.Fields(text), " ")
+}
+
+// naturalExpenseArgs recognizes a deliberately narrow, conversational form of
+// /nuevo_gasto. It returns regular command arguments so the established
+// validation, member lookup and expense creation logic remains the one source
+// of truth.
+func naturalExpenseArgs(text string) ([]string, bool) {
+	// The command may arrive as "@Splitter cargué ...". Remove mentions only
+	// for intent recognition; a payer can still be selected in the normal flow.
+	candidate := strings.TrimSpace(menuMentionPattern.ReplaceAllString(text, " "))
+	if !naturalExpensePrefix.MatchString(candidate) {
+		return nil, false
+	}
+	candidate = strings.TrimSpace(naturalExpensePrefix.ReplaceAllString(candidate, ""))
+	fields := strings.Fields(candidate)
+	if len(fields) < 2 {
+		return nil, false
+	}
+
+	for i, field := range fields {
+		amountToken := strings.Trim(strings.TrimSpace(field), "$€£")
+		amount, ok := parseSummaryAmount(amountToken)
+		if !ok || i == 0 {
+			continue
+		}
+		// handleNewExpense accepts its standard [description] [amount] shape.
+		// Formatting through ParseFloat makes "$15.000" and "15,000" safe too.
+		args := append([]string{}, fields[:i]...)
+		args = append(args, strconv.FormatFloat(amount, 'f', -1, 64))
+		return args, true
+	}
+	return nil, false
 }
 
 func allowedMenuTypos(alias string) int {

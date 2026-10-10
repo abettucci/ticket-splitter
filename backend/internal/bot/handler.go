@@ -92,12 +92,17 @@ func (h *Handler) HandleUpdate(ctx context.Context, update *telegram.Update) err
 	if fields := strings.Fields(text); len(fields) > 1 && strings.HasPrefix(fields[0], "@") && strings.HasPrefix(fields[1], "/") {
 		text = strings.Join(fields[1:], " ")
 	}
+	// Fetch the current state before applying the WhatsApp group guard. A bare
+	// "1" is an intentional response only when this exact person has just been
+	// shown a numbered selector; any other group conversation stays ignored.
+	state := h.conv.Get(chatID, userID)
+
 	// In WhatsApp groups, never treat ordinary group conversation as bot input.
 	// A person must @mention Splitter, reply to one of its messages (the
-	// sidecar marks that as IsMentioned), or use an actual interactive action.
-	// Telegram keeps its established command behavior because it has native
-	// bot command routing and does not set IsWhatsAppWeb.
-	if msg.IsWhatsAppWeb && msg.Chat.Type == "group" && !msg.IsMentioned {
+	// sidecar marks that as IsMentioned), select an actual interactive action,
+	// or submit an unambiguous selection for their active menu. Telegram keeps
+	// its established command behavior because it has native command routing.
+	if msg.IsWhatsAppWeb && msg.Chat.Type == "group" && !msg.IsMentioned && !isSafeWhatsAppGroupContinuation(state, text) {
 		return nil
 	}
 	// In WhatsApp groups, a reply can target an older bot message while a newer
@@ -110,7 +115,6 @@ func (h *Handler) HandleUpdate(ctx context.Context, update *telegram.Update) err
 	}
 	if !strings.HasPrefix(text, "/") {
 		// Verificar si hay una conversación activa para este usuario
-		state := h.conv.Get(chatID, userID)
 		if state != nil {
 			return h.handleConversationStep(ctx, chatID, userID, displayName, text, state)
 		}
@@ -224,6 +228,31 @@ func (h *Handler) HandleUpdate(ctx context.Context, update *telegram.Update) err
 		return h.handleChangelog(ctx, chatID, args)
 	default:
 		return h.tg.SendMessage(ctx, chatID, "❓ Comando no reconocido. Usa /help para ver los comandos disponibles.")
+	}
+}
+
+// isSafeWhatsAppGroupContinuation deliberately accepts only short, structured
+// choices while a person has an active selector. Free-form text still needs a
+// mention or a reply to a Splitter message, so everyday group chat cannot be
+// mistaken for an expense input.
+func isSafeWhatsAppGroupContinuation(state *ConversationState, text string) bool {
+	if state == nil {
+		return false
+	}
+
+	selection := strings.TrimSpace(text)
+	switch state.Step {
+	case StepSelectMenuOption:
+		_, ok := resolveMenuOptionText(selection)
+		return ok
+	case StepSelectNewExpenseAction:
+		lower := strings.ToLower(selection)
+		return lower == "1" || lower == "2" || strings.Contains(lower, "dividir") || strings.Contains(lower, "ver gasto")
+	case StepSelectDivideExpense, StepSelectRedivideExpense, StepSelectPaymentExpense:
+		n, err := strconv.Atoi(selection)
+		return err == nil && n > 0
+	default:
+		return false
 	}
 }
 
