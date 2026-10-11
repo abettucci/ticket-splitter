@@ -37,6 +37,8 @@ const (
 	StepGiftItemTarget             // monto objetivo opcional del regalo
 	StepSelectGiftContributionItem // regalo al que se le registra un aporte
 	StepGiftContributionAmount     // monto aportado al regalo seleccionado
+	StepSelectDeleteExpense        // selección de un gasto para enviar a la papelera
+	StepConfirmDelete              // confirmación de envío a la papelera
 )
 
 // ConversationState guarda el estado de una conversación en curso para un usuario

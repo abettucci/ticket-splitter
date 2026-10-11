@@ -395,6 +395,11 @@ async function getBotReplyContext(msg) {
     return { isReplyToClient: false, quotedText: '' };
   }
 
+  // Read the local context first. getQuotedMessage() is intermittently
+  // unavailable for older messages even when WhatsApp gives us the quoted
+  // stanza ID, and a reply to our own sent message is still deliberate input.
+  const savedContext = findOutboundBotContext(msg);
+
   try {
     const quoted = await msg.getQuotedMessage();
     // `fromMe` is the most reliable signal for a quoted outbound message.
@@ -402,15 +407,15 @@ async function getBotReplyContext(msg) {
     // `author`/`from`, which makes an identity comparison alone insufficient.
     const isReplyToClient = quoted?.fromMe === true
       || sameWhatsAppIdentity(quoted?.author || quoted?.from, ownJid);
-    const savedContext = findOutboundBotContext(msg, quoted);
-    const quotedText = savedContext || String(quoted?.body || '');
+    const context = savedContext || findOutboundBotContext(msg, quoted);
+    const quotedText = context || String(quoted?.body || '');
     console.log('Quoted message context:', {
-      saved: Boolean(savedContext),
+      saved: Boolean(context),
       quotedTextLength: quotedText.length,
       botReply: isReplyToClient,
     });
     return {
-      isReplyToClient: isReplyToClient || Boolean(savedContext),
+      isReplyToClient: isReplyToClient || Boolean(context),
       // Some group replies expose the quoted author as the group JID, so the
       // identity check above can be inconclusive. Forward the quoted body in
       // either case; the Go backend only recognizes its own fixed menu text
@@ -419,7 +424,10 @@ async function getBotReplyContext(msg) {
     };
   } catch (error) {
     console.warn('Could not resolve quoted message:', error.message);
-    return { isReplyToClient: false, quotedText: '' };
+    return {
+      isReplyToClient: Boolean(savedContext),
+      quotedText: savedContext,
+    };
   }
 }
 

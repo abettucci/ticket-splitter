@@ -565,6 +565,9 @@ Usa /restaurar [id] para recuperar un gasto.`)
 			},
 		},
 	}
+	// Persist this confirmation so the numbered WhatsApp fallback works even
+	// when the next message lands on another Lambda instance.
+	h.conv.Set(chatID, userID, &ConversationState{Step: StepConfirmDelete, ExpenseShortID: shortID})
 
 	// Enviar mensaje con botones
 	return h.tg.SendMessageWithOptions(ctx, &telegram.SendMessageRequest{
@@ -573,6 +576,24 @@ Usa /restaurar [id] para recuperar un gasto.`)
 		ParseMode:   "HTML",
 		ReplyMarkup: keyboard,
 	})
+}
+
+// confirmDelete handles WhatsApp's numbered/button confirmation. Telegram's
+// native callback keeps its message-editing UX in handleDeleteConfirmation.
+func (h *Handler) confirmDelete(ctx context.Context, chatID, userID int64, shortID string) error {
+	expense, err := h.db.GetExpenseByShortID(ctx, chatID, shortID)
+	if err != nil {
+		return h.tg.SendMessage(ctx, chatID, "❌ El gasto ya no existe o fue eliminado.")
+	}
+	if err := h.db.DeleteExpense(ctx, expense.ID, expense.PK, expense.SK, userID); err != nil {
+		h.logger.Printf("Error deleting expense: %v", err)
+		return h.tg.SendMessage(ctx, chatID, "❌ No pude eliminar el gasto. Intentá de nuevo.")
+	}
+	h.conv.Clear(chatID, userID)
+	h.logChangelog(chatID, userID, "", "expense", shortID, expense.Description, "deleted", map[string]string{
+		"monto": telegram.FormatMoney(expense.TotalAmount),
+	})
+	return h.tg.SendMessage(ctx, chatID, fmt.Sprintf("✅ Envié <b>%s</b> a la papelera. Podés restaurarlo durante 30 días.", telegram.EscapeHTML(expense.Description)))
 }
 
 // handleTrash muestra los gastos eliminados (papelera)

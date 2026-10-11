@@ -17,6 +17,7 @@ func TestResolveMenuOptionTextHandlesLabelsNumbersAndTypos(t *testing.T) {
 		{input: "ver gastso", want: "ver_gastos", ok: true},
 		{input: "resumir lista", want: "resumir_lista", ok: true},
 		{input: "listas de regalos", want: "regalos", ok: true},
+		{input: "borrar gasto", want: "eliminar_gasto", ok: true},
 		{input: "Opción 15", want: "resumir_lista", ok: true},
 		{input: "estoy hablando de gastos", ok: false},
 	}
@@ -47,6 +48,8 @@ func TestSafeWhatsAppGroupContinuationOnlyAllowsStructuredSelections(t *testing.
 		{name: "free expense amount is accepted", state: &ConversationState{Step: StepNewExpenseAmount}, text: "180500", want: true},
 		{name: "gift list action", state: &ConversationState{Step: StepSelectGiftListAction}, text: "registrar aporte", want: true},
 		{name: "gift amount is accepted", state: &ConversationState{Step: StepGiftContributionAmount}, text: "5000", want: true},
+		{name: "delete selector number", state: &ConversationState{Step: StepSelectDeleteExpense}, text: "4", want: true},
+		{name: "delete confirmation", state: &ConversationState{Step: StepConfirmDelete}, text: "1", want: true},
 		{name: "ordinary chat is not accepted", state: &ConversationState{Step: StepSelectMenuOption}, text: "che llego en diez", want: false},
 		{name: "no active flow", state: nil, text: "1", want: false},
 	}

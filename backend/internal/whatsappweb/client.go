@@ -28,7 +28,7 @@ type Client struct {
 // Text menus are the WhatsApp Web fallback for Telegram inline keyboards.
 // Keep enough room for the complete main menu (including the expense-list
 // summary) while still keeping replies comfortably scannable in chat.
-const maxWhatsAppTextMenuOptions = 16
+const maxWhatsAppTextMenuOptions = 17
 
 // NewClient crea un cliente que postea outbound al sidecar.
 // Si las env vars no están seteadas, el cliente igual se construye pero los Send fallarán.

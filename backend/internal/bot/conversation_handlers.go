@@ -56,6 +56,9 @@ func (h *Handler) handleMenu(ctx context.Context, chatID int64, userID ...int64)
 			{
 				{Text: "🎁 Regalos compartidos", CallbackData: "menu:regalos"},
 			},
+			{
+				{Text: "🗑 Eliminar gasto", CallbackData: "menu:eliminar_gasto"},
+			},
 		},
 	}
 
@@ -109,6 +112,8 @@ func (h *Handler) runMenuAction(ctx context.Context, chatID, userID int64, userN
 		return h.startExpenseSummary(ctx, chatID, userID)
 	case "regalos":
 		return h.handleGiftLists(ctx, chatID, userID)
+	case "eliminar_gasto":
+		return h.handleMenuDelete(ctx, chatID, userID)
 	case "mas_opciones":
 		return h.handleMoreMenu(ctx, chatID, userID, userName, 1)
 	case "mas_opciones_2":
@@ -133,7 +138,7 @@ func (h *Handler) handleMoreMenu(ctx context.Context, chatID, userID int64, user
 		{{{Text: "➗ Dividir gasto", CallbackData: "menu:dividir"}, {Text: "🔄 Redividir", CallbackData: "menu:redividir"}, {Text: "➡️ Más", CallbackData: "menu:mas_opciones_3"}}},
 		{{{Text: "🐀 Recordatorios", CallbackData: "menu:recordatorios"}, {Text: "🐀 Avisar deudas", CallbackData: "menu:recordar_deudas"}, {Text: "➡️ Más", CallbackData: "menu:mas_opciones_4"}}},
 		{{{Text: "👥 Miembros", CallbackData: "menu:miembros"}, {Text: "💸 Pagar una deuda", CallbackData: "menu:pagar_deuda"}, {Text: "➡️ Más", CallbackData: "menu:mas_opciones_5"}}},
-		{{{Text: "❓ Ayuda", CallbackData: "menu:ayuda"}, {Text: "🧾 Resumir una lista", CallbackData: "menu:resumir_lista"}, {Text: "🎁 Regalos", CallbackData: "menu:regalos"}}, {{Text: "🧪 Crear pruebas", CallbackData: "menu:crear_prueba"}, {Text: "🎲 Simular operaciones", CallbackData: "menu:simular_prueba"}, {Text: "🧹 Limpiar pruebas", CallbackData: "menu:limpiar_prueba"}}},
+		{{{Text: "❓ Ayuda", CallbackData: "menu:ayuda"}, {Text: "🧾 Resumir una lista", CallbackData: "menu:resumir_lista"}, {Text: "🎁 Regalos", CallbackData: "menu:regalos"}}, {{Text: "🗑 Eliminar gasto", CallbackData: "menu:eliminar_gasto"}, {Text: "🧪 Crear pruebas", CallbackData: "menu:crear_prueba"}, {Text: "🎲 Simular operaciones", CallbackData: "menu:simular_prueba"}}, {{Text: "🧹 Limpiar pruebas", CallbackData: "menu:limpiar_prueba"}}},
 	}
 	if page < 1 || page > len(pages) {
 		return h.handleMenu(ctx, chatID, userID)
@@ -186,6 +191,42 @@ func (h *Handler) handleMenuRedivide(ctx context.Context, chatID, userID int64) 
 		ChatID:      chatID,
 		Text:        "🔄 <b>¿Qué gasto querés redividir?</b>\n\nElegí uno para repartirlo entre los miembros actuales del grupo.",
 		ParseMode:   "HTML",
+		ReplyMarkup: telegram.InlineKeyboardMarkup{InlineKeyboard: rows},
+	})
+}
+
+// handleMenuDelete gives the destructive action a first-class, discoverable
+// flow. The actual delete still asks for a second explicit confirmation and
+// moves the expense to the 30-day trash rather than deleting it permanently.
+func (h *Handler) handleMenuDelete(ctx context.Context, chatID, userID int64) error {
+	expenses, err := h.db.GetGroupExpenses(ctx, chatID, 20)
+	if err != nil {
+		return h.tg.SendMessage(ctx, chatID, "❌ Error al obtener los gastos.")
+	}
+	if len(expenses) == 0 {
+		return h.tg.SendMessage(ctx, chatID, "ℹ️ No hay gastos activos para eliminar.")
+	}
+
+	options := make(map[int]string, len(expenses))
+	rows := make([][]telegram.InlineKeyboardButton, 0, len(expenses))
+	var text strings.Builder
+	text.WriteString("🗑 <b>¿Qué gasto querés enviar a la papelera?</b>\n\n")
+	for index, expense := range expenses {
+		n := index + 1
+		shortID := expense.ID[:8]
+		options[n] = shortID
+		label := fmt.Sprintf("🗑 %s — %s", expense.Description, telegram.FormatMoney(expense.TotalAmount))
+		if len([]rune(label)) > 58 {
+			label = string([]rune(label)[:55]) + "..."
+		}
+		rows = append(rows, []telegram.InlineKeyboardButton{{Text: label, CallbackData: fmt.Sprintf("delete:%s", shortID)}})
+		fmt.Fprintf(&text, "%d. %s — %s\n", n, telegram.EscapeHTML(expense.Description), telegram.FormatMoney(expense.TotalAmount))
+	}
+	text.WriteString("\nDespués te voy a pedir confirmación. Podés restaurarlo durante 30 días.")
+
+	h.conv.Set(chatID, userID, &ConversationState{Step: StepSelectDeleteExpense, DivideOptions: options})
+	return h.tg.SendMessageWithOptions(ctx, &telegram.SendMessageRequest{
+		ChatID: chatID, Text: text.String(), ParseMode: "HTML",
 		ReplyMarkup: telegram.InlineKeyboardMarkup{InlineKeyboard: rows},
 	})
 }
@@ -748,6 +789,27 @@ func (h *Handler) handleConversationStep(ctx context.Context, chatID, userID int
 		h.conv.Clear(chatID, userID)
 		return h.handleExpenseSummary(ctx, chatID, userID, userName, text)
 
+	case StepSelectDeleteExpense:
+		if n, err := strconv.Atoi(strings.TrimSpace(text)); err == nil {
+			if shortID, ok := state.DivideOptions[n]; ok {
+				h.conv.Clear(chatID, userID)
+				return h.handleDelete(ctx, chatID, userID, []string{shortID})
+			}
+		}
+		return h.tg.SendMessage(ctx, chatID, "❌ Elegí el número del gasto que querés eliminar.")
+
+	case StepConfirmDelete:
+		lower := strings.ToLower(strings.TrimSpace(text))
+		switch {
+		case lower == "1" || lower == "si" || lower == "sí" || strings.Contains(lower, "eliminar"):
+			return h.confirmDelete(ctx, chatID, userID, state.ExpenseShortID)
+		case lower == "2" || strings.Contains(lower, "cancel"):
+			h.conv.Clear(chatID, userID)
+			return h.tg.SendMessage(ctx, chatID, "✖️ Eliminación cancelada. El gasto sigue activo.")
+		default:
+			return h.tg.SendMessage(ctx, chatID, "❌ Respondé 1 para eliminar o 2 para cancelar.")
+		}
+
 	case StepSelectGiftList, StepGiftListName, StepGiftListLinkCode, StepSelectGiftListAction,
 		StepGiftItemDescription, StepGiftItemTarget, StepSelectGiftContributionItem, StepGiftContributionAmount:
 		return h.handleGiftConversationStep(ctx, chatID, userID, userName, text, state)
@@ -946,6 +1008,10 @@ func (h *Handler) handleNaturalLanguage(ctx context.Context, chatID, userID int6
 			action:   func() error { return h.handleGiftLists(ctx, chatID, userID) },
 		},
 		{
+			keywords: []string{"eliminar gasto", "borrar gasto", "quitar gasto", "papelera"},
+			action:   func() error { return h.handleMenuDelete(ctx, chatID, userID) },
+		},
+		{
 			keywords: []string{"hola", "holi", "buenas", "buenos dias", "buenos días", "buen dia", "buen día"},
 			action:   func() error { return h.handleMenu(ctx, chatID, userID) },
 		},
@@ -1053,7 +1119,7 @@ var menuOptionNumbers = map[string]string{
 	"1": "nuevo_gasto", "2": "ver_gastos", "3": "mis_deudas", "4": "balance",
 	"5": "dividir", "6": "redividir", "7": "recordatorios", "8": "recordar_deudas",
 	"9": "miembros", "10": "ayuda", "11": "pagar_deuda", "12": "crear_prueba",
-	"13": "simular_prueba", "14": "limpiar_prueba", "15": "resumir_lista", "16": "regalos",
+	"13": "simular_prueba", "14": "limpiar_prueba", "15": "resumir_lista", "16": "regalos", "17": "eliminar_gasto",
 }
 
 var menuTextOptions = []menuTextOption{
@@ -1073,6 +1139,7 @@ var menuTextOptions = []menuTextOption{
 	{action: "limpiar_prueba", aliases: []string{"limpiar datos de prueba", "limpiar pruebas"}},
 	{action: "resumir_lista", aliases: []string{"resumir una lista", "resumir lista", "resumir gastos", "resumen de gastos", "resumen lista", "sumar gastos y reintegros", "calcular reintegros"}},
 	{action: "regalos", aliases: []string{"regalos", "lista de regalos", "listas de regalos", "regalo compartido", "fondo para regalo"}},
+	{action: "eliminar_gasto", aliases: []string{"eliminar gasto", "borrar gasto", "quitar gasto", "papelera"}},
 }
 
 // resolveMenuOptionText handles visible menu labels as well as small typing
@@ -1220,6 +1287,23 @@ func (h *Handler) handleQuotedMenuChoice(ctx context.Context, chatID, userID int
 		// natural-language menu selection while keeping the quoted menu as the
 		// authoritative context.
 		return true, h.handleNaturalLanguage(ctx, chatID, userID, "", selection, false)
+	}
+
+	if strings.Contains(quotedLower, "¿eliminar este gasto?") || strings.Contains(quotedLower, "eliminar este gasto?") {
+		shortID := shortExpenseIDPattern.FindString(quotedText)
+		if shortID == "" {
+			return false, nil
+		}
+		lowerSelection := strings.ToLower(selection)
+		switch {
+		case selection == "1" || lowerSelection == "si" || lowerSelection == "sí" || strings.Contains(lowerSelection, "eliminar"):
+			return true, h.confirmDelete(ctx, chatID, userID, shortID)
+		case selection == "2" || strings.Contains(lowerSelection, "cancel"):
+			h.conv.Clear(chatID, userID)
+			return true, h.tg.SendMessage(ctx, chatID, "✖️ Eliminación cancelada. El gasto sigue activo.")
+		default:
+			return true, h.tg.SendMessage(ctx, chatID, "❌ Respondé 1 para eliminar o 2 para cancelar.")
+		}
 	}
 
 	if strings.Contains(quotedLower, "¿qué gasto querés dividir?") {

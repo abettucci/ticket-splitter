@@ -102,17 +102,17 @@ func (h *Handler) HandleUpdate(ctx context.Context, update *telegram.Update) err
 	// sidecar marks that as IsMentioned), select an actual interactive action,
 	// or answer a pending question for their own active flow. Telegram keeps its
 	// established command behavior because it has native command routing.
-	if msg.IsWhatsAppWeb && msg.Chat.Type == "group" && !msg.IsMentioned && !isSafeWhatsAppGroupContinuation(state, text) {
-		h.logger.Printf("WA Web group message ignored: chat=%d sender=%d mentioned=false active_step=%d reason=not_addressed", chatID, userID, conversationStepForLog(state))
-		return nil
-	}
-	// In WhatsApp groups, a reply can target an older bot message while a newer
-	// conversation state is still active. The quoted menu is more specific than
-	// that transient state, so resolve it first.
+	// Resolve a recognized quoted bot message before this guard. On some
+	// WhatsApp Web versions a reply is delivered with its quoted context but
+	// without the mention flag; the quote itself is still intentional input.
 	if msg.QuotedText != "" {
 		if handled, err := h.handleQuotedMenuChoice(ctx, chatID, userID, text, msg.QuotedText); handled {
 			return err
 		}
+	}
+	if msg.IsWhatsAppWeb && msg.Chat.Type == "group" && !msg.IsMentioned && !isSafeWhatsAppGroupContinuation(state, text) {
+		h.logger.Printf("WA Web group message ignored: chat=%d sender=%d mentioned=false active_step=%d reason=not_addressed", chatID, userID, conversationStepForLog(state))
+		return nil
 	}
 	if !strings.HasPrefix(text, "/") {
 		// Verificar si hay una conversación activa para este usuario
@@ -288,7 +288,7 @@ func isSafeWhatsAppGroupContinuation(state *ConversationState, text string) bool
 	case StepConfirmRedivide:
 		lower := strings.ToLower(selection)
 		return lower == "1" || lower == "2" || strings.Contains(lower, "confirm") || strings.Contains(lower, "cancel") || lower == "si" || lower == "sí"
-	case StepSelectDivideExpense, StepSelectRedivideExpense, StepSelectPaymentExpense, StepSelectGiftList, StepSelectGiftContributionItem:
+	case StepSelectDivideExpense, StepSelectRedivideExpense, StepSelectPaymentExpense, StepSelectGiftList, StepSelectGiftContributionItem, StepSelectDeleteExpense:
 		n, err := strconv.Atoi(selection)
 		return err == nil && n > 0
 	case StepGiftListName, StepGiftListLinkCode, StepGiftItemDescription, StepGiftItemTarget, StepGiftContributionAmount:
@@ -296,6 +296,9 @@ func isSafeWhatsAppGroupContinuation(state *ConversationState, text string) bool
 	case StepSelectGiftListAction:
 		lower := strings.ToLower(selection)
 		return lower == "1" || lower == "2" || lower == "3" || strings.Contains(lower, "agregar") || strings.Contains(lower, "aporte") || strings.Contains(lower, "volver")
+	case StepConfirmDelete:
+		lower := strings.ToLower(selection)
+		return lower == "1" || lower == "2" || lower == "si" || lower == "sí" || strings.Contains(lower, "eliminar") || strings.Contains(lower, "cancel")
 	default:
 		return false
 	}
@@ -353,6 +356,13 @@ func (h *Handler) handleInteractiveSelection(ctx context.Context, chatID, userID
 		return h.tg.SendMessage(ctx, chatID, "✖️ Corrección cancelada. No modifiqué el gasto ni sus pagos.")
 	case "pay":
 		return h.handlePayByShortID(ctx, chatID, userID, parts[1])
+	case "delete":
+		return h.handleDelete(ctx, chatID, userID, []string{parts[1]})
+	case "delete_confirm":
+		return h.confirmDelete(ctx, chatID, userID, parts[1])
+	case "delete_cancel":
+		h.conv.Clear(chatID, userID)
+		return h.tg.SendMessage(ctx, chatID, "✖️ Eliminación cancelada. El gasto sigue activo.")
 	case "conv_payer":
 		return h.handlePayerCallback(ctx, chatID, userID, userName, parts[1], "")
 	case "gift":
@@ -404,8 +414,10 @@ func (h *Handler) handleCallbackQuery(ctx context.Context, query *telegram.Callb
 	// Enrutar a handler apropiado
 	switch action {
 	case "delete_confirm":
+		h.conv.Clear(chatID, userID)
 		return h.handleDeleteConfirmation(ctx, chatID, userID, shortID, query.ID, query.Message.MessageID)
 	case "delete_cancel":
+		h.conv.Clear(chatID, userID)
 		return h.handleDeleteCancellation(ctx, chatID, shortID, query.ID, query.Message.MessageID)
 	case "menu":
 		return h.handleMenuCallback(ctx, chatID, userID, displayName, shortID, query.ID)
@@ -427,6 +439,8 @@ func (h *Handler) handleCallbackQuery(ctx context.Context, query *telegram.Callb
 		return h.tg.SendMessage(ctx, chatID, "✖️ Corrección cancelada. No modifiqué el gasto ni sus pagos.")
 	case "pay":
 		return h.handlePayByShortID(ctx, chatID, userID, shortID)
+	case "delete":
+		return h.handleDelete(ctx, chatID, userID, []string{shortID})
 	case "conv_payer":
 		return h.handlePayerCallback(ctx, chatID, userID, displayName, shortID, query.ID)
 	case "gift":

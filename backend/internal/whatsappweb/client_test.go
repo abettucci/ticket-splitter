@@ -25,7 +25,7 @@ func TestInboundPayloadKeepsLargeGroupIDsExact(t *testing.T) {
 	}
 }
 
-func TestSendMessageWithOptionsKeepsFifteenthMenuOption(t *testing.T) {
+func TestSendMessageWithOptionsKeepsSeventeenthMenuOption(t *testing.T) {
 	var received sendRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
@@ -40,8 +40,8 @@ func TestSendMessageWithOptionsKeepsFifteenthMenuOption(t *testing.T) {
 	}))
 	defer server.Close()
 
-	buttons := make([][]telegram.InlineKeyboardButton, 0, 15)
-	for i := 1; i <= 15; i++ {
+	buttons := make([][]telegram.InlineKeyboardButton, 0, 17)
+	for i := 1; i <= 17; i++ {
 		buttons = append(buttons, []telegram.InlineKeyboardButton{{Text: "Opción " + string(rune('A'-1+i)), CallbackData: "menu:test"}})
 	}
 	client := &Client{httpClient: server.Client(), sidecarURL: server.URL, sharedSecret: "test-secret"}
@@ -55,10 +55,10 @@ func TestSendMessageWithOptionsKeepsFifteenthMenuOption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SendMessageWithOptions: %v", err)
 	}
-	if !strings.Contains(received.Text, "15. Opción O") {
-		t.Fatalf("fifteenth menu option is missing from WhatsApp text menu: %q", received.Text)
+	if !strings.Contains(received.Text, "17. Opción Q") {
+		t.Fatalf("seventeenth menu option is missing from WhatsApp text menu: %q", received.Text)
 	}
-	if received.Interactive == nil || len(received.Interactive.Options) != 15 {
-		t.Fatalf("interactive fallback options = %#v, want all 15 options", received.Interactive)
+	if received.Interactive == nil || len(received.Interactive.Options) != 17 {
+		t.Fatalf("interactive fallback options = %#v, want all 17 options", received.Interactive)
 	}
 }
