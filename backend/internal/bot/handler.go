@@ -172,6 +172,26 @@ func (h *Handler) HandleUpdate(ctx context.Context, update *telegram.Update) err
 			return h.startExpenseSummary(ctx, chatID, userID)
 		}
 		return h.handleExpenseSummary(ctx, chatID, userID, displayName, strings.Join(args, " "))
+	case "/regalos", "/listas_regalos", "/gift_lists":
+		return h.handleGiftLists(ctx, chatID, userID)
+	case "/crear_lista_regalos", "/nueva_lista_regalos":
+		if len(args) == 0 {
+			return h.startGiftListCreation(ctx, chatID, userID)
+		}
+		list, err := h.db.CreateGiftList(ctx, chatID, userID, displayName, strings.Join(args, " "))
+		if err != nil {
+			return h.tg.SendMessage(ctx, chatID, "❌ No pude crear la lista. Intentá de nuevo.")
+		}
+		return h.showGiftList(ctx, chatID, userID, list.ShareCode)
+	case "/vincular_lista_regalos", "/vincular_regalos":
+		if len(args) == 0 {
+			return h.startGiftListLink(ctx, chatID, userID)
+		}
+		list, err := h.db.LinkGiftList(ctx, chatID, userID, args[0])
+		if err != nil {
+			return h.tg.SendMessage(ctx, chatID, "❌ No encontré ese código de lista.")
+		}
+		return h.showGiftList(ctx, chatID, userID, list.ShareCode)
 	case "/help":
 		return h.handleHelp(ctx, chatID)
 	case "/nuevo_gasto", "/newexpense":
@@ -268,9 +288,14 @@ func isSafeWhatsAppGroupContinuation(state *ConversationState, text string) bool
 	case StepConfirmRedivide:
 		lower := strings.ToLower(selection)
 		return lower == "1" || lower == "2" || strings.Contains(lower, "confirm") || strings.Contains(lower, "cancel") || lower == "si" || lower == "sí"
-	case StepSelectDivideExpense, StepSelectRedivideExpense, StepSelectPaymentExpense:
+	case StepSelectDivideExpense, StepSelectRedivideExpense, StepSelectPaymentExpense, StepSelectGiftList, StepSelectGiftContributionItem:
 		n, err := strconv.Atoi(selection)
 		return err == nil && n > 0
+	case StepGiftListName, StepGiftListLinkCode, StepGiftItemDescription, StepGiftItemTarget, StepGiftContributionAmount:
+		return selection != ""
+	case StepSelectGiftListAction:
+		lower := strings.ToLower(selection)
+		return lower == "1" || lower == "2" || lower == "3" || strings.Contains(lower, "agregar") || strings.Contains(lower, "aporte") || strings.Contains(lower, "volver")
 	default:
 		return false
 	}
@@ -330,6 +355,8 @@ func (h *Handler) handleInteractiveSelection(ctx context.Context, chatID, userID
 		return h.handlePayByShortID(ctx, chatID, userID, parts[1])
 	case "conv_payer":
 		return h.handlePayerCallback(ctx, chatID, userID, userName, parts[1], "")
+	case "gift":
+		return h.handleGiftInteractive(ctx, chatID, userID, userName, parts[1])
 	default:
 		return h.tg.SendMessage(ctx, chatID, "❌ Esa opción no está disponible. Pedile el menú a Splitter de nuevo.")
 	}
@@ -402,6 +429,8 @@ func (h *Handler) handleCallbackQuery(ctx context.Context, query *telegram.Callb
 		return h.handlePayByShortID(ctx, chatID, userID, shortID)
 	case "conv_payer":
 		return h.handlePayerCallback(ctx, chatID, userID, displayName, shortID, query.ID)
+	case "gift":
+		return h.handleGiftInteractive(ctx, chatID, userID, displayName, shortID)
 	default:
 		return h.tg.AnswerCallbackQuery(ctx, query.ID, "❌ Acción desconocida")
 	}
@@ -542,6 +571,10 @@ Para lo cotidiano, elegí una opción del menú o escribí lo que necesitás. Lo
 🧾 <b>Resumir una lista</b>
 • /resumir_gastos - Suma gastos, descuenta reintegros e interpreta cuotas y personas mencionadas
   <i>Ejemplo: Juan pagó cena $24000. Ana debe $12000 y Pedro debe $12000.</i>
+
+🎁 <b>Regalos compartidos</b>
+• /regalos - Crear, ver o vincular listas de regalos
+  <i>Una lista tiene un código para verla desde otros grupos y registrar aportes sin crear deudas.</i>
 
 ℹ️ <b>Info</b>
 • /start - Bienvenida

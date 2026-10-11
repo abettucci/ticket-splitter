@@ -125,6 +125,12 @@ El sidecar de WhatsApp Web puede entregar recordatorios individuales que un usua
 
 Los recordatorios ya creados y los creados desde Telegram siguen entregándose por Telegram.
 
+## 🎁 Listas de regalos compartidas
+
+Desde un grupo, abrí **Regalos compartidos** (o escribí `/regalos`) para crear una lista, sumar ideas y registrar aportes en ARS. Cada lista entrega un código corto; compartilo en otro grupo y elegí **Vincular una lista** para que ambos vean exactamente los mismos regalos y aportes.
+
+Los aportes son fondos informativos: no crean deudas automáticamente. Cuando se compre el regalo, registrá el gasto final y elegí sólo a quienes deben participar en esa división.
+
 ## 🔧 Desarrollo Local
 
 ```bash

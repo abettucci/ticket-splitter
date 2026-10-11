@@ -29,6 +29,14 @@ const (
 	StepSelectRedivideExpense      // selección de gasto a redividir (para WhatsApp sin botones)
 	StepSelectPaymentExpense       // selección de una deuda propia para marcar como pagada
 	StepExpenseSummary             // espera una lista libre de gastos/reintegros para resumirla sin guardarla
+	StepSelectGiftList             // crear, vincular o abrir una lista de regalos
+	StepGiftListName               // nombre de una nueva lista compartida
+	StepGiftListLinkCode           // código de una lista creada en otro grupo
+	StepSelectGiftListAction       // acciones sobre una lista ya abierta
+	StepGiftItemDescription        // descripción de un regalo dentro de la lista
+	StepGiftItemTarget             // monto objetivo opcional del regalo
+	StepSelectGiftContributionItem // regalo al que se le registra un aporte
+	StepGiftContributionAmount     // monto aportado al regalo seleccionado
 )
 
 // ConversationState guarda el estado de una conversación en curso para un usuario
@@ -41,6 +49,8 @@ type ConversationState struct {
 	DivideOptions          map[int]string // índice (1-based) -> shortID, usado en los selectores de gastos
 	ParticipantOptions     map[int]int64  // índice (1-based) -> userID, usado para una división selectiva
 	SelectedParticipantIDs []int64        // user IDs listos para confirmar una redivisión
+	GiftListCode           string         // código corto de la lista de regalos activa
+	GiftItemID             string         // regalo al que se está cargando un aporte
 }
 
 // ConversationManager maneja el estado conversacional por usuario/chat
@@ -138,6 +148,8 @@ func conversationRecordFromState(chatID, userID int64, state *ConversationState)
 		DivideOptions:          divideOptions,
 		ParticipantOptions:     participantOptions,
 		SelectedParticipantIDs: state.SelectedParticipantIDs,
+		GiftListCode:           state.GiftListCode,
+		GiftItemID:             state.GiftItemID,
 		ExpiresAt:              state.ExpiresAt,
 	}
 }
@@ -164,5 +176,7 @@ func conversationStateFromRecord(conversation *db.Conversation) *ConversationSta
 		DivideOptions:          divideOptions,
 		ParticipantOptions:     participantOptions,
 		SelectedParticipantIDs: conversation.SelectedParticipantIDs,
+		GiftListCode:           conversation.GiftListCode,
+		GiftItemID:             conversation.GiftItemID,
 	}
 }

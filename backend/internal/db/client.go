@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -168,8 +169,72 @@ type Conversation struct {
 	DivideOptions          map[string]string `dynamodbav:"divide_options,omitempty"`
 	ParticipantOptions     map[string]int64  `dynamodbav:"participant_options,omitempty"`
 	SelectedParticipantIDs []int64           `dynamodbav:"selected_participant_ids,omitempty"`
+	GiftListCode           string            `dynamodbav:"gift_list_code,omitempty"`
+	GiftItemID             string            `dynamodbav:"gift_item_id,omitempty"`
 	ExpiresAt              time.Time         `dynamodbav:"expires_at"`
 	TTL                    int64             `dynamodbav:"ttl"`
+}
+
+// GiftList is a shared collection of gift ideas and contributions. A list is
+// independent from a group: groups only hold links to it, so the same list can
+// be deliberately shared with another group through its short code.
+type GiftList struct {
+	PK            string    `dynamodbav:"PK"` // GIFT_LIST#<id>
+	SK            string    `dynamodbav:"SK"` // METADATA
+	ID            string    `dynamodbav:"id"`
+	ShareCode     string    `dynamodbav:"share_code"`
+	Name          string    `dynamodbav:"name"`
+	CreatedBy     int64     `dynamodbav:"created_by"`
+	CreatedByName string    `dynamodbav:"created_by_name"`
+	CreatedAt     time.Time `dynamodbav:"created_at"`
+	UpdatedAt     time.Time `dynamodbav:"updated_at"`
+}
+
+// GiftListLink makes a GiftList visible inside a particular group. The list's
+// data remains stored under GIFT_LIST, rather than copied per group.
+type GiftListLink struct {
+	PK           string    `dynamodbav:"PK"` // GROUP#<chat_id>
+	SK           string    `dynamodbav:"SK"` // GIFT_LIST#<list_id>
+	ChatID       int64     `dynamodbav:"chat_id"`
+	GiftListID   string    `dynamodbav:"gift_list_id"`
+	GiftListName string    `dynamodbav:"gift_list_name"`
+	ShareCode    string    `dynamodbav:"share_code"`
+	LinkedAt     time.Time `dynamodbav:"linked_at"`
+	LinkedBy     int64     `dynamodbav:"linked_by"`
+}
+
+// GiftItem is an individual present or gift objective. TargetAmount is zero
+// when the group only wants to track the idea and has no target yet.
+type GiftItem struct {
+	PK           string    `dynamodbav:"PK"` // GIFT_LIST#<list_id>
+	SK           string    `dynamodbav:"SK"` // GIFT#<gift_id>
+	ID           string    `dynamodbav:"id"`
+	GiftListID   string    `dynamodbav:"gift_list_id"`
+	Description  string    `dynamodbav:"description"`
+	TargetAmount float64   `dynamodbav:"target_amount,omitempty"`
+	CreatedBy    int64     `dynamodbav:"created_by"`
+	CreatedAt    time.Time `dynamodbav:"created_at"`
+}
+
+// GiftContribution records an actual contribution to a gift. It is separate
+// from a normal expense: it tracks funding without creating a debt until the
+// group decides to buy and register the final expense.
+type GiftContribution struct {
+	PK              string    `dynamodbav:"PK"` // GIFT_LIST#<list_id>
+	SK              string    `dynamodbav:"SK"` // CONTRIBUTION#<gift_id>#<id>
+	ID              string    `dynamodbav:"id"`
+	GiftListID      string    `dynamodbav:"gift_list_id"`
+	GiftItemID      string    `dynamodbav:"gift_item_id"`
+	Amount          float64   `dynamodbav:"amount"`
+	ContributorID   int64     `dynamodbav:"contributor_id"`
+	ContributorName string    `dynamodbav:"contributor_name"`
+	CreatedAt       time.Time `dynamodbav:"created_at"`
+}
+
+type giftListShare struct {
+	PK         string `dynamodbav:"PK"` // GIFT_LIST_CODE#<code>
+	SK         string `dynamodbav:"SK"` // METADATA
+	GiftListID string `dynamodbav:"gift_list_id"`
 }
 
 // Reminder representa un recordatorio de pago
@@ -381,6 +446,243 @@ func (c *Client) GetGroup(ctx context.Context, chatID int64) (*Group, error) {
 		return nil, fmt.Errorf("failed to unmarshal group: %w", err)
 	}
 	return &group, nil
+}
+
+// ============================================
+// GIFT LIST OPERATIONS
+// ============================================
+
+// CreateGiftList creates a list and immediately links it to the group where it
+// was created. The public share code is intentionally short enough to send in
+// a chat, while the UUID remains the canonical internal identifier.
+func (c *Client) CreateGiftList(ctx context.Context, chatID, userID int64, userName, name string) (*GiftList, error) {
+	listID := uuid.NewString()
+	shareCode := strings.ToUpper(strings.ReplaceAll(listID[:8], "-", ""))
+	now := time.Now()
+	list := &GiftList{
+		PK:            fmt.Sprintf("GIFT_LIST#%s", listID),
+		SK:            "METADATA",
+		ID:            listID,
+		ShareCode:     shareCode,
+		Name:          name,
+		CreatedBy:     userID,
+		CreatedByName: userName,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	link := giftListLinkForGroup(list, chatID, userID, now)
+	share := giftListShare{
+		PK:         fmt.Sprintf("GIFT_LIST_CODE#%s", shareCode),
+		SK:         "METADATA",
+		GiftListID: list.ID,
+	}
+
+	listItem, err := attributevalue.MarshalMap(list)
+	if err != nil {
+		return nil, fmt.Errorf("marshal gift list: %w", err)
+	}
+	linkItem, err := attributevalue.MarshalMap(link)
+	if err != nil {
+		return nil, fmt.Errorf("marshal gift list link: %w", err)
+	}
+	shareItem, err := attributevalue.MarshalMap(share)
+	if err != nil {
+		return nil, fmt.Errorf("marshal gift list share code: %w", err)
+	}
+
+	_, err = c.db.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{Put: &types.Put{TableName: aws.String(c.tableName), Item: listItem}},
+			{Put: &types.Put{TableName: aws.String(c.tableName), Item: linkItem}},
+			{Put: &types.Put{TableName: aws.String(c.tableName), Item: shareItem, ConditionExpression: aws.String("attribute_not_exists(PK)")}},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create gift list: %w", err)
+	}
+	return list, nil
+}
+
+func giftListLinkForGroup(list *GiftList, chatID, userID int64, linkedAt time.Time) *GiftListLink {
+	return &GiftListLink{
+		PK:           fmt.Sprintf("GROUP#%d", chatID),
+		SK:           fmt.Sprintf("GIFT_LIST#%s", list.ID),
+		ChatID:       chatID,
+		GiftListID:   list.ID,
+		GiftListName: list.Name,
+		ShareCode:    list.ShareCode,
+		LinkedAt:     linkedAt,
+		LinkedBy:     userID,
+	}
+}
+
+// GetGiftListByCode resolves a code to the canonical list. A code is not a
+// password; it is a deliberate sharing mechanism between trusted groups.
+func (c *Client) GetGiftListByCode(ctx context.Context, code string) (*GiftList, error) {
+	code = strings.ToUpper(strings.TrimSpace(code))
+	shareResult, err := c.db.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(c.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: fmt.Sprintf("GIFT_LIST_CODE#%s", code)},
+			"SK": &types.AttributeValueMemberS{Value: "METADATA"},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get gift list share code: %w", err)
+	}
+	if len(shareResult.Item) == 0 {
+		return nil, fmt.Errorf("gift list not found")
+	}
+	var share giftListShare
+	if err := attributevalue.UnmarshalMap(shareResult.Item, &share); err != nil {
+		return nil, fmt.Errorf("unmarshal gift list share code: %w", err)
+	}
+	return c.GetGiftList(ctx, share.GiftListID)
+}
+
+func (c *Client) GetGiftList(ctx context.Context, listID string) (*GiftList, error) {
+	result, err := c.db.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(c.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: fmt.Sprintf("GIFT_LIST#%s", listID)},
+			"SK": &types.AttributeValueMemberS{Value: "METADATA"},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get gift list: %w", err)
+	}
+	if len(result.Item) == 0 {
+		return nil, fmt.Errorf("gift list not found")
+	}
+	var list GiftList
+	if err := attributevalue.UnmarshalMap(result.Item, &list); err != nil {
+		return nil, fmt.Errorf("unmarshal gift list: %w", err)
+	}
+	return &list, nil
+}
+
+// LinkGiftList makes an existing list visible to another group. It is
+// idempotent, allowing the same code to be safely pasted more than once.
+func (c *Client) LinkGiftList(ctx context.Context, chatID, userID int64, code string) (*GiftList, error) {
+	list, err := c.GetGiftListByCode(ctx, code)
+	if err != nil {
+		return nil, err
+	}
+	item, err := attributevalue.MarshalMap(giftListLinkForGroup(list, chatID, userID, time.Now()))
+	if err != nil {
+		return nil, fmt.Errorf("marshal gift list link: %w", err)
+	}
+	_, err = c.db.PutItem(ctx, &dynamodb.PutItemInput{TableName: aws.String(c.tableName), Item: item})
+	if err != nil {
+		return nil, fmt.Errorf("link gift list: %w", err)
+	}
+	return list, nil
+}
+
+func (c *Client) GetGroupGiftLists(ctx context.Context, chatID int64) ([]GiftListLink, error) {
+	result, err := c.db.Query(ctx, &dynamodb.QueryInput{
+		TableName:              aws.String(c.tableName),
+		KeyConditionExpression: aws.String("PK = :pk AND begins_with(SK, :sk)"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":pk": &types.AttributeValueMemberS{Value: fmt.Sprintf("GROUP#%d", chatID)},
+			":sk": &types.AttributeValueMemberS{Value: "GIFT_LIST#"},
+		},
+		ScanIndexForward: aws.Bool(true),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get group gift lists: %w", err)
+	}
+	var links []GiftListLink
+	if err := attributevalue.UnmarshalListOfMaps(result.Items, &links); err != nil {
+		return nil, fmt.Errorf("unmarshal group gift lists: %w", err)
+	}
+	return links, nil
+}
+
+func (c *Client) CreateGiftItem(ctx context.Context, listID, description string, targetAmount float64, userID int64) (*GiftItem, error) {
+	item := &GiftItem{
+		PK:           fmt.Sprintf("GIFT_LIST#%s", listID),
+		SK:           fmt.Sprintf("GIFT#%s", uuid.NewString()),
+		GiftListID:   listID,
+		Description:  description,
+		TargetAmount: targetAmount,
+		CreatedBy:    userID,
+		CreatedAt:    time.Now(),
+	}
+	item.ID = strings.TrimPrefix(item.SK, "GIFT#")
+	encoded, err := attributevalue.MarshalMap(item)
+	if err != nil {
+		return nil, fmt.Errorf("marshal gift item: %w", err)
+	}
+	_, err = c.db.PutItem(ctx, &dynamodb.PutItemInput{TableName: aws.String(c.tableName), Item: encoded})
+	if err != nil {
+		return nil, fmt.Errorf("create gift item: %w", err)
+	}
+	return item, nil
+}
+
+func (c *Client) GetGiftItems(ctx context.Context, listID string) ([]GiftItem, error) {
+	result, err := c.db.Query(ctx, &dynamodb.QueryInput{
+		TableName:              aws.String(c.tableName),
+		KeyConditionExpression: aws.String("PK = :pk AND begins_with(SK, :sk)"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":pk": &types.AttributeValueMemberS{Value: fmt.Sprintf("GIFT_LIST#%s", listID)},
+			":sk": &types.AttributeValueMemberS{Value: "GIFT#"},
+		},
+		ScanIndexForward: aws.Bool(true),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get gift items: %w", err)
+	}
+	var items []GiftItem
+	if err := attributevalue.UnmarshalListOfMaps(result.Items, &items); err != nil {
+		return nil, fmt.Errorf("unmarshal gift items: %w", err)
+	}
+	return items, nil
+}
+
+func (c *Client) CreateGiftContribution(ctx context.Context, listID, itemID string, amount float64, userID int64, userName string) (*GiftContribution, error) {
+	contributionID := uuid.NewString()
+	contribution := &GiftContribution{
+		PK:              fmt.Sprintf("GIFT_LIST#%s", listID),
+		SK:              fmt.Sprintf("CONTRIBUTION#%s#%s", itemID, contributionID),
+		ID:              contributionID,
+		GiftListID:      listID,
+		GiftItemID:      itemID,
+		Amount:          amount,
+		ContributorID:   userID,
+		ContributorName: userName,
+		CreatedAt:       time.Now(),
+	}
+	encoded, err := attributevalue.MarshalMap(contribution)
+	if err != nil {
+		return nil, fmt.Errorf("marshal gift contribution: %w", err)
+	}
+	_, err = c.db.PutItem(ctx, &dynamodb.PutItemInput{TableName: aws.String(c.tableName), Item: encoded})
+	if err != nil {
+		return nil, fmt.Errorf("create gift contribution: %w", err)
+	}
+	return contribution, nil
+}
+
+func (c *Client) GetGiftContributions(ctx context.Context, listID string) ([]GiftContribution, error) {
+	result, err := c.db.Query(ctx, &dynamodb.QueryInput{
+		TableName:              aws.String(c.tableName),
+		KeyConditionExpression: aws.String("PK = :pk AND begins_with(SK, :sk)"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":pk": &types.AttributeValueMemberS{Value: fmt.Sprintf("GIFT_LIST#%s", listID)},
+			":sk": &types.AttributeValueMemberS{Value: "CONTRIBUTION#"},
+		},
+		ScanIndexForward: aws.Bool(true),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get gift contributions: %w", err)
+	}
+	var contributions []GiftContribution
+	if err := attributevalue.UnmarshalListOfMaps(result.Items, &contributions); err != nil {
+		return nil, fmt.Errorf("unmarshal gift contributions: %w", err)
+	}
+	return contributions, nil
 }
 
 // ============================================

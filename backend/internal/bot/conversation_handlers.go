@@ -53,6 +53,9 @@ func (h *Handler) handleMenu(ctx context.Context, chatID int64, userID ...int64)
 			{
 				{Text: "🧾 Resumir una lista", CallbackData: "menu:resumir_lista"},
 			},
+			{
+				{Text: "🎁 Regalos compartidos", CallbackData: "menu:regalos"},
+			},
 		},
 	}
 
@@ -104,6 +107,8 @@ func (h *Handler) runMenuAction(ctx context.Context, chatID, userID int64, userN
 		return h.handleClearTestData(ctx, chatID, userID)
 	case "resumir_lista":
 		return h.startExpenseSummary(ctx, chatID, userID)
+	case "regalos":
+		return h.handleGiftLists(ctx, chatID, userID)
 	case "mas_opciones":
 		return h.handleMoreMenu(ctx, chatID, userID, userName, 1)
 	case "mas_opciones_2":
@@ -128,7 +133,7 @@ func (h *Handler) handleMoreMenu(ctx context.Context, chatID, userID int64, user
 		{{{Text: "➗ Dividir gasto", CallbackData: "menu:dividir"}, {Text: "🔄 Redividir", CallbackData: "menu:redividir"}, {Text: "➡️ Más", CallbackData: "menu:mas_opciones_3"}}},
 		{{{Text: "🐀 Recordatorios", CallbackData: "menu:recordatorios"}, {Text: "🐀 Avisar deudas", CallbackData: "menu:recordar_deudas"}, {Text: "➡️ Más", CallbackData: "menu:mas_opciones_4"}}},
 		{{{Text: "👥 Miembros", CallbackData: "menu:miembros"}, {Text: "💸 Pagar una deuda", CallbackData: "menu:pagar_deuda"}, {Text: "➡️ Más", CallbackData: "menu:mas_opciones_5"}}},
-		{{{Text: "❓ Ayuda", CallbackData: "menu:ayuda"}, {Text: "🧾 Resumir una lista", CallbackData: "menu:resumir_lista"}, {Text: "🧪 Crear pruebas", CallbackData: "menu:crear_prueba"}}, {{Text: "🎲 Simular operaciones", CallbackData: "menu:simular_prueba"}, {Text: "🧹 Limpiar pruebas", CallbackData: "menu:limpiar_prueba"}}},
+		{{{Text: "❓ Ayuda", CallbackData: "menu:ayuda"}, {Text: "🧾 Resumir una lista", CallbackData: "menu:resumir_lista"}, {Text: "🎁 Regalos", CallbackData: "menu:regalos"}}, {{Text: "🧪 Crear pruebas", CallbackData: "menu:crear_prueba"}, {Text: "🎲 Simular operaciones", CallbackData: "menu:simular_prueba"}, {Text: "🧹 Limpiar pruebas", CallbackData: "menu:limpiar_prueba"}}},
 	}
 	if page < 1 || page > len(pages) {
 		return h.handleMenu(ctx, chatID, userID)
@@ -742,6 +747,10 @@ func (h *Handler) handleConversationStep(ctx context.Context, chatID, userID int
 	case StepExpenseSummary:
 		h.conv.Clear(chatID, userID)
 		return h.handleExpenseSummary(ctx, chatID, userID, userName, text)
+
+	case StepSelectGiftList, StepGiftListName, StepGiftListLinkCode, StepSelectGiftListAction,
+		StepGiftItemDescription, StepGiftItemTarget, StepSelectGiftContributionItem, StepGiftContributionAmount:
+		return h.handleGiftConversationStep(ctx, chatID, userID, userName, text, state)
 	}
 	return nil
 }
@@ -933,6 +942,10 @@ func (h *Handler) handleNaturalLanguage(ctx context.Context, chatID, userID int6
 			action:   func() error { return h.startExpenseSummary(ctx, chatID, userID) },
 		},
 		{
+			keywords: []string{"regalos", "lista de regalos", "listas de regalos", "regalo compartido", "fondo para regalo"},
+			action:   func() error { return h.handleGiftLists(ctx, chatID, userID) },
+		},
+		{
 			keywords: []string{"hola", "holi", "buenas", "buenos dias", "buenos días", "buen dia", "buen día"},
 			action:   func() error { return h.handleMenu(ctx, chatID, userID) },
 		},
@@ -1040,7 +1053,7 @@ var menuOptionNumbers = map[string]string{
 	"1": "nuevo_gasto", "2": "ver_gastos", "3": "mis_deudas", "4": "balance",
 	"5": "dividir", "6": "redividir", "7": "recordatorios", "8": "recordar_deudas",
 	"9": "miembros", "10": "ayuda", "11": "pagar_deuda", "12": "crear_prueba",
-	"13": "simular_prueba", "14": "limpiar_prueba", "15": "resumir_lista",
+	"13": "simular_prueba", "14": "limpiar_prueba", "15": "resumir_lista", "16": "regalos",
 }
 
 var menuTextOptions = []menuTextOption{
@@ -1059,6 +1072,7 @@ var menuTextOptions = []menuTextOption{
 	{action: "simular_prueba", aliases: []string{"simular operaciones", "simulacion", "simular"}},
 	{action: "limpiar_prueba", aliases: []string{"limpiar datos de prueba", "limpiar pruebas"}},
 	{action: "resumir_lista", aliases: []string{"resumir una lista", "resumir lista", "resumir gastos", "resumen de gastos", "resumen lista", "sumar gastos y reintegros", "calcular reintegros"}},
+	{action: "regalos", aliases: []string{"regalos", "lista de regalos", "listas de regalos", "regalo compartido", "fondo para regalo"}},
 }
 
 // resolveMenuOptionText handles visible menu labels as well as small typing

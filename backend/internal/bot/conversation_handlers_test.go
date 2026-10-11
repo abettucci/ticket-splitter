@@ -16,6 +16,7 @@ func TestResolveMenuOptionTextHandlesLabelsNumbersAndTypos(t *testing.T) {
 		{input: "@Splitter ver gastos", want: "ver_gastos", ok: true},
 		{input: "ver gastso", want: "ver_gastos", ok: true},
 		{input: "resumir lista", want: "resumir_lista", ok: true},
+		{input: "listas de regalos", want: "regalos", ok: true},
 		{input: "Opción 15", want: "resumir_lista", ok: true},
 		{input: "estoy hablando de gastos", ok: false},
 	}
@@ -44,6 +45,8 @@ func TestSafeWhatsAppGroupContinuationOnlyAllowsStructuredSelections(t *testing.
 		{name: "redivide confirmation", state: &ConversationState{Step: StepConfirmRedivide}, text: "confirmar", want: true},
 		{name: "free expense description is accepted", state: &ConversationState{Step: StepNewExpenseDescription}, text: "nafta y seguro", want: true},
 		{name: "free expense amount is accepted", state: &ConversationState{Step: StepNewExpenseAmount}, text: "180500", want: true},
+		{name: "gift list action", state: &ConversationState{Step: StepSelectGiftListAction}, text: "registrar aporte", want: true},
+		{name: "gift amount is accepted", state: &ConversationState{Step: StepGiftContributionAmount}, text: "5000", want: true},
 		{name: "ordinary chat is not accepted", state: &ConversationState{Step: StepSelectMenuOption}, text: "che llego en diez", want: false},
 		{name: "no active flow", state: nil, text: "1", want: false},
 	}
@@ -66,6 +69,8 @@ func TestConversationRecordRoundTripKeepsUserFlow(t *testing.T) {
 		DivideOptions:          map[int]string{1: "a1b2c3d4"},
 		ParticipantOptions:     map[int]int64{1: 10, 2: 20},
 		SelectedParticipantIDs: []int64{10},
+		GiftListCode:           "AB12CD34",
+		GiftItemID:             "gift-1",
 	}
 
 	record := conversationRecordFromState(500, 600, state)
@@ -73,8 +78,30 @@ func TestConversationRecordRoundTripKeepsUserFlow(t *testing.T) {
 	if record.PK != "" || record.SK != "" {
 		t.Fatalf("keys should be created by the storage client, got PK=%q SK=%q", record.PK, record.SK)
 	}
-	if restored.Step != StepConfirmRedivide || restored.ExpenseShortID != "a1b2c3d4" || restored.ParticipantOptions[2] != 20 || len(restored.SelectedParticipantIDs) != 1 || restored.SelectedParticipantIDs[0] != 10 {
+	if restored.Step != StepConfirmRedivide || restored.ExpenseShortID != "a1b2c3d4" || restored.ParticipantOptions[2] != 20 || len(restored.SelectedParticipantIDs) != 1 || restored.SelectedParticipantIDs[0] != 10 || restored.GiftListCode != "AB12CD34" || restored.GiftItemID != "gift-1" {
 		t.Fatalf("conversation round trip lost state: %#v", restored)
+	}
+}
+
+func TestParseGiftAmount(t *testing.T) {
+	tests := []struct {
+		input      string
+		allowEmpty bool
+		want       float64
+		ok         bool
+	}{
+		{input: "15000", want: 15000, ok: true},
+		{input: "$15.000", want: 15000, ok: true},
+		{input: "$15.000,50", want: 15000.50, ok: true},
+		{input: "sin monto", allowEmpty: true, want: 0, ok: true},
+		{input: "sin monto", allowEmpty: false, ok: false},
+		{input: "nada", ok: false},
+	}
+	for _, test := range tests {
+		got, ok := parseGiftAmount(test.input, test.allowEmpty)
+		if got != test.want || ok != test.ok {
+			t.Fatalf("parseGiftAmount(%q, %t) = (%v, %t), want (%v, %t)", test.input, test.allowEmpty, got, ok, test.want, test.ok)
+		}
 	}
 }
 

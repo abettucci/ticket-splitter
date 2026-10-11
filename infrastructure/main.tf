@@ -254,6 +254,7 @@ resource "aws_iam_role_policy" "lambda_dynamodb" {
           "dynamodb:PutItem",
           "dynamodb:UpdateItem",
           "dynamodb:DeleteItem",
+          "dynamodb:TransactWriteItems",
           "dynamodb:Query",
           "dynamodb:Scan"
         ]
