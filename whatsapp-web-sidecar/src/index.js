@@ -388,6 +388,15 @@ async function messageMentionsClient(msg) {
 // as "¿Cuál es la descripción del gasto?".
 async function getBotReplyContext(msg) {
   const ownJid = client.info?.wid?._serialized;
+  // TEMP diagnostic: log only field names and booleans (no text, no ids) so we
+  // can see which field this WhatsApp Web build uses for quoted replies.
+  if (msg.from?.endsWith('@g.us')) {
+    console.log('Quote diagnostic:', {
+      hasQuotedMsgType: typeof msg.hasQuotedMsg,
+      hasQuotedMsg: Boolean(msg.hasQuotedMsg),
+      dataQuoteKeys: Object.keys(msg._data || {}).filter((k) => /quot|context|stanza|reply|parent/i.test(k)),
+    });
+  }
   // Group replies identify their quoted message author separately from the
   // group chat (`from`). Different WhatsApp Web builds expose either the
   // public flag or the underlying quoted stanza ID.
