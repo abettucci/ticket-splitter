@@ -303,7 +303,7 @@ func isSafeWhatsAppGroupContinuation(state *ConversationState, text string) bool
 	case StepConfirmRedivide:
 		lower := strings.ToLower(selection)
 		return lower == "1" || lower == "2" || strings.Contains(lower, "confirm") || strings.Contains(lower, "cancel") || lower == "si" || lower == "sí"
-	case StepSelectDivideExpense, StepSelectRedivideExpense, StepSelectPaymentExpense, StepSelectGiftList, StepSelectGiftContributionItem, StepSelectDeleteExpense:
+	case StepSelectDivideExpense, StepSelectRedivideExpense, StepSelectPaymentExpense, StepSelectPaymentPayer, StepSelectGiftList, StepSelectGiftContributionItem, StepSelectDeleteExpense:
 		n, err := strconv.Atoi(selection)
 		return err == nil && n > 0
 	case StepGiftListName, StepGiftListLinkCode, StepGiftItemDescription, StepGiftItemTarget, StepGiftContributionAmount:

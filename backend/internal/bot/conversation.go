@@ -39,6 +39,7 @@ const (
 	StepGiftContributionAmount     // monto aportado al regalo seleccionado
 	StepSelectDeleteExpense        // selección de un gasto para enviar a la papelera
 	StepConfirmDelete              // confirmación de envío a la papelera
+	StepSelectPaymentPayer         // elegir quién pagó la deuda seleccionada
 )
 
 // ConversationState guarda el estado de una conversación en curso para un usuario
