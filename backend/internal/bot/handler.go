@@ -110,7 +110,11 @@ func (h *Handler) HandleUpdate(ctx context.Context, update *telegram.Update) err
 			return err
 		}
 	}
-	if msg.IsWhatsAppWeb && msg.Chat.Type == "group" && !msg.IsMentioned && !isSafeWhatsAppGroupContinuation(state, text) {
+	bareCommand := msg.IsWhatsAppWeb && msg.Chat.Type == "group" && !msg.IsMentioned && isBareGroupCommand(text)
+	if bareCommand {
+		text = "/" + strings.ToLower(strings.TrimSpace(text))
+	}
+	if msg.IsWhatsAppWeb && msg.Chat.Type == "group" && !msg.IsMentioned && !bareCommand && !isSafeWhatsAppGroupContinuation(state, text) {
 		h.logger.Printf("WA Web group message ignored: chat=%d sender=%d mentioned=false active_step=%d reason=not_addressed", chatID, userID, conversationStepForLog(state))
 		return nil
 	}
@@ -250,6 +254,17 @@ func (h *Handler) HandleUpdate(ctx context.Context, update *telegram.Update) err
 	default:
 		return h.tg.SendMessage(ctx, chatID, "❓ Comando no reconocido. Usa /help para ver los comandos disponibles.")
 	}
+}
+
+// isBareGroupCommand reports whether a group message is exactly one of the
+// word commands ("menu", "cancelar"). Those are explicit enough to answer
+// without an @mention; other group conversation stays ignored.
+func isBareGroupCommand(text string) bool {
+	switch strings.ToLower(strings.TrimSpace(text)) {
+	case "menu", "menú", "cancelar":
+		return true
+	}
+	return false
 }
 
 // isSafeWhatsAppGroupContinuation accepts a person's next free-text answer
