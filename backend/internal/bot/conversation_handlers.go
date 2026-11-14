@@ -785,6 +785,12 @@ func (h *Handler) handleConversationStep(ctx context.Context, chatID, userID int
 		}
 		return h.tg.SendMessage(ctx, chatID, "❌ Respondé con el número de una deuda de la lista.")
 
+	case StepSelectPaymentPayer:
+		if n, err := strconv.Atoi(strings.TrimSpace(text)); err == nil {
+			return h.handlePaymentPayerChoice(ctx, chatID, userID, state, n)
+		}
+		return h.tg.SendMessage(ctx, chatID, "❌ Respondé con el número de quien pagó.")
+
 	case StepExpenseSummary:
 		h.conv.Clear(chatID, userID)
 		return h.handleExpenseSummary(ctx, chatID, userID, userName, text)

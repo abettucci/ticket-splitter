@@ -1375,6 +1375,32 @@ func (c *Client) GetUserPendingSplitsForGroup(ctx context.Context, userID, chatI
 	return groupSplits, nil
 }
 
+// MarkSplitAsPaidBy marca como pagada la parte de debtorID y registra quién la
+// pagó. Solo actualiza una división que siga pendiente.
+func (c *Client) MarkSplitAsPaidBy(ctx context.Context, expenseID string, debtorID, payerID int64, payerName string) error {
+	pk := fmt.Sprintf("EXPENSE#%s", expenseID)
+	sk := fmt.Sprintf("SPLIT#%d", debtorID)
+
+	_, err := c.db.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(c.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: pk},
+			"SK": &types.AttributeValueMemberS{Value: sk},
+		},
+		ConditionExpression: aws.String("attribute_exists(PK) AND attribute_exists(SK) AND is_paid = :unpaid"),
+		UpdateExpression:    aws.String("SET is_paid = :paid, paid_at = :now, paid_by_id = :payer, paid_by_name = :payerName"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":paid":      &types.AttributeValueMemberBOOL{Value: true},
+			":unpaid":    &types.AttributeValueMemberBOOL{Value: false},
+			":now":       &types.AttributeValueMemberS{Value: time.Now().Format(time.RFC3339)},
+			":payer":     &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", payerID)},
+			":payerName": &types.AttributeValueMemberS{Value: payerName},
+		},
+	})
+
+	return err
+}
+
 // MarkSplitAsPaid marca una división como pagada
 func (c *Client) MarkSplitAsPaid(ctx context.Context, expenseID string, userID int64) error {
 	pk := fmt.Sprintf("EXPENSE#%s", expenseID)
